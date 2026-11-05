@@ -31,6 +31,9 @@
     "all distinct ways + matching miss stream" for same-bank groups rather
     than a fixed way per group.
 
+    TODO : PLRU coverage gap - the listed sequence never depends on the way-2 commit bit
+    (lru[0] for 2'd2); the explicit PLRU order tests below would close it.
+
     Additional testcases (added, to be reviewed; NOT implemented below)
     Tag bank
     - hit on a pending line returns hit=1, ready=0; after fill the same lookup

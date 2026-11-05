@@ -152,6 +152,7 @@ module coalescer_contract_tb;
             tag_result[group].ready = (group == 1 || group == 3);
             tag_result[group].hit_way = 2'(group);
         end
+        // TODO : tag_lookup_t width becomes 30 once tap_mask is added; update this check.
         if ($bits(coalesced_addr_out_t) != 243 || $bits(frag_data_t) != 263 ||
             $bits(tag_lookup_t) != 26)
             $fatal(1, "unexpected default contract widths");
