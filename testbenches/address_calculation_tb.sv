@@ -85,6 +85,7 @@ module address_calculation_tb;
     int errors = 0;
     int checks = 0;
 
+    // TODO : Morton index calculation is currently hardcoded for 16-bit x and y. This should be parameterized for different texture sizes.
     // ------------------------------- ADDR GEN -------------------------------
     // Drives one tap through a standalone addr_calc and checks every decoded
     // field against the byte address given in the table above.

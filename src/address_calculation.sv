@@ -86,6 +86,7 @@ module addr_calc (
     logic [35:0] full_addr;
     logic [31:0] morton_index;
     
+    // TODO : Morton index calculation is currently hardcoded for 16-bit x and y. This should be parameterized for different texture sizes.
     for (genvar b = 0; b < 16; b++) begin : gen_morton
         assign morton_index[2*b]     = x[b];
         assign morton_index[2*b + 1] = y[b];
@@ -172,7 +173,7 @@ module coalesced_addrs #()(
 
     always_comb begin
         coa_addrs0 = '0;
-        coa_addrs1 = '0;
+        coa_addrs1 = '0;coa_addrs
         coa_addrs2 = '0;
         coa_addrs3 = '0;
         coa_addrs0.line_addr = addr0.line_addr;
