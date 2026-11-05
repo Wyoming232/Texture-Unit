@@ -5,6 +5,8 @@
 `include "src/data_array.sv"
 `include "src/frag_fifo.sv"
 
+// TODO : does not compile yet: struct literals use '=' / ';' instead of ':' / ',',
+// base_addr is declared 1-bit, tmu_req.* fields must go through tmu_req.payload.
 // this module is a wrapper containing address_calculation
 module hit_path_temp (
     input logic clk, n_rst,
