@@ -2,6 +2,7 @@
 
 import cache_pkg::*;
 
+// TODO : module is named `top`; rename to reorder_buffer (reorder_buffer_tb instantiates reorder_buffer).
 module top #(
     parameter PTR_WIDTH = $clog2(ROB_DEPTH),
     parameter ROB_IDX_BITS = $clog2(ROB_DEPTH)

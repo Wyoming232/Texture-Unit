@@ -23,6 +23,8 @@ module frag_fifo #(
     logic [PTR_W-1:0] wr_ptr, rd_ptr;
     logic push_fire, pop_fire;
 
+    // TODO : ready is derived from registered count, so push+pop in the same cycle while
+    // full performs the pop only (push refused). Add a bypass if full-throughput is required.
     assign full = count == COUNT_W'(DEPTH);
     assign empty = count == '0;
     assign ready_in = n_rst && !full;

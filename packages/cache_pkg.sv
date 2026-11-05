@@ -163,6 +163,8 @@ package cache_pkg;
     // ----------------------TAG ARRAY----------------------
     // Only these fields are consumed by tag lookup/allocation.
     // valid disables empty groups; it is distinct from channel req_valid.
+    // TODO : tag_array.sv reads req[g].tap_mask, which this struct does not have.
+    // Adding it changes $bits to 30 (coalescer_tb asserts 26) and the adapter must drive it.
     typedef struct packed {
         logic valid;
         logic [BANK_W-1:0] bank;
@@ -201,6 +203,7 @@ package cache_pkg;
     } frag_data_t;
     typedef frag_data_t frag_entry_t;
 
+    // TODO : miss_request_fifo.sv uses miss_req_entry_t {line_addr, miss_way}; it is not defined.
     // TODO : define structs for MISS REQ FIFO
     // ----------------------MISS REQUEST FIFO----------------------
     

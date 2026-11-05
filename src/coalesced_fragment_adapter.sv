@@ -22,6 +22,8 @@ module coalesced_fragment_adapter (
 
         for (int group = 0; group < LANES; group++) begin
             // An address fault rejects the whole pixel before any tag work.
+            // TODO : once tag_lookup_t gains tap_mask, drive it from lines[group].tap_mask
+            // (tag_array forwards it as bank_tap_mask).
             tag_req[group].valid = (|coa_addr_out.lines[group].tap_mask)
                                    && !(|coa_addr_out.addr_error);
             tag_req[group].bank =

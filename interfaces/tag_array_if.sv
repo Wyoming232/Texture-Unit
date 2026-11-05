@@ -15,6 +15,8 @@ interface tag_array_if;
     // arbitration. hit=1,ready=0 is a pending-line match, not a new miss.
     // Capture the original outcome: allocating a new tag must not change its
     // response from hit=0 to hit=1 before the miss request is retained.
+    // TODO : tag_array.sv drives busy, bank_result, bank_tap_mask, bank_result_valid
+    // and reads bank_result_ready; none are declared here (see documentation/proposed_patches.md).
     logic rsp_valid, rsp_ready;
     cache_pkg::tag_out_t [cache_pkg::LANES-1:0] rsp;
 
