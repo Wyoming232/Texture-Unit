@@ -1,45 +1,110 @@
-TOPLEVEL_LANG ?= verilog
+# Questa simulation targets for the implemented SystemVerilog testbenches.
+# Load your site's Questa module (if needed) before running make.
 
-VERILOG_SOURCES ?= wrappers/triangle_setup_wrapper.sv
+ROOT ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
+BUILD_DIR ?= $(ROOT)/.questa
+BUILD_DIR := $(abspath $(BUILD_DIR))
 
-COCOTB_TOPLEVEL ?= triangle_setup_wrapper
+VLIB ?= vlib
+VLOG ?= vlog
+VSIM ?= vsim
+VCOVER ?= vcover
+VLOG_FLAGS ?= -sv
+VSIM_FLAGS ?=
+SEED ?= 1
+COVER_TYPES ?= bcefst
 
-COCOTB_TEST_MODULES ?= python.triangle_stage_tb
+TESTS := address_calculation coalescer tag_array fragment_fifo miss_request_fifo data_array
 
-ifeq (,$(filter setup setup_all,$(MAKECMDGOALS)))
-  include $(shell PATH=$(HOME)/.local/bin:$$PATH cocotb-config --makefiles)/Makefile.sim
-endif
+TB_address_calculation := testbenches/address_calculation_tb.sv
+TB_coalescer := testbenches/coalescer_tb.sv
+TB_tag_array := testbenches/tag_array_tb.sv
+TB_fragment_fifo := testbenches/fragment_fifo_tb.sv
+TB_miss_request_fifo := testbenches/miss_request_fifo_tb.sv
+TB_data_array := testbenches/data_array_tb.sv
 
-.PHONY: setup, setup_all
+TOP_address_calculation := address_calculation_tb
+TOP_coalescer := coalescer_contract_tb
+TOP_tag_array := tag_array_tb
+TOP_fragment_fifo := fragment_fifo_tb
+TOP_miss_request_fifo := miss_request_fifo_tb
+TOP_data_array := data_array_tb
 
-clean:: #the :: will append whatever under the cocotb clean from include. Just do both together why not.
-	@rm -rf work vsim.wlf transcript
-	@echo "--------Cleaned Directory--------"
+# The other benches include their DUT source. data_array_tb does not.
+EXTRA_data_array := $(ROOT)/src/data_array.sv
 
-setup:
-	@mkdir python
-	@echo "--------Added python Directory--------"
-	@mkdir wrappers
-	@echo "--------Added wrappers Directory--------"
-	@mkdir testbenches
-	@echo "--------Added testbenches Directory--------"
+SOURCES := $(wildcard $(ROOT)/packages/*.sv $(ROOT)/interfaces/*.sv \
+             $(ROOT)/interfaces/*.vh $(ROOT)/src/*.sv $(ROOT)/testbenches/*.sv)
 
-	@pip3 install --user cocotb
-	@chmod +x run.bash
-	@chmod +x run_waves.bash
+.DEFAULT_GOAL := help
+.PHONY: help list check all clean
+.SECONDARY:
 
-	@echo "--------Setup Complete--------"
+help:
+	@echo 'Questa targets (run from the Texture-Unit directory):'
+	@echo '  make <test>.sim      compile and run one bench in batch mode'
+	@echo '  make <test>.wav      run with full WLF logging, then open Wave GUI'
+	@echo '  make <test>.cov      run code coverage, save UCDB and HTML report'
+	@echo '  make <test>.compile  compile only'
+	@echo '  make check           run all implemented benches'
+	@echo '  make list            show supported test names and top modules'
+	@echo '  make clean           remove generated .questa files'
+	@echo 'Options: SEED=<integer>, BUILD_DIR=<path>, VLOG_FLAGS=..., VSIM_FLAGS=...'
+	@echo 'reorder_buffer_tb.sv is incomplete; hit_path_temp.sv and frag_fifo.sv are placeholders.'
 
-setup_all:
-	@mkdir interfaces
-	@mkdir packages
-	@mkdir python
-	@mkdir testbenches
-	@mkdir waves
-	@mkdir wrappers
+list:
+	@$(foreach test,$(TESTS),echo '$(test) -> $(TOP_$(test)) ($(TB_$(test)))';)
 
-	@pip3 install --user cocotb
-	@chmod +x run.bash
-	@chmod +x run_waves.bash
+all check: $(addsuffix .sim,$(TESTS))
 
-	@echo "--------Full Setup Complete--------"
+# One library per bench prevents a test's included RTL/interfaces from
+# redefining modules in another test. The package is compiled first; the
+# include guard then prevents its in-source includes from redeclaring it.
+$(BUILD_DIR)/%/.compiled: $(SOURCES) $(ROOT)/Makefile
+	$(if $(filter $*,$(TESTS)),,$(error Unknown test '$*'; run make list))
+	@mkdir -p "$(@D)"
+	@cd "$(@D)" && $(VLIB) work && \
+	  $(VLOG) $(VLOG_FLAGS) -work work -l package.log +incdir+"$(ROOT)" \
+	    "$(ROOT)/packages/cache_pkg.sv" && \
+	  $(VLOG) $(VLOG_FLAGS) -work work -l compile.log +incdir+"$(ROOT)" \
+	    +define+CACHE_PKG_SV $(EXTRA_$*) "$(ROOT)/$(TB_$*)"
+	@touch "$@"
+
+%.compile: $(BUILD_DIR)/%/.compiled
+	@echo 'Compiled $* in $(BUILD_DIR)/$*'
+
+%.sim: $(BUILD_DIR)/%/.compiled
+	@cd "$(BUILD_DIR)/$*" && $(VSIM) -c $(VSIM_FLAGS) -sv_seed $(SEED) \
+	  -l sim.log -do 'onerror {quit -code 1}; onbreak {quit -code 2}; run -all; quit -code 0' \
+	  work.$(TOP_$*)
+
+%.wav: $(BUILD_DIR)/%/.compiled
+	@cd "$(BUILD_DIR)/$*" && $(VSIM) -c $(VSIM_FLAGS) -sv_seed $(SEED) \
+	  -voptargs=+acc -wlf waves.wlf -l waves.log \
+	  -do 'onerror {quit -code 1}; onbreak {quit -code 2}; log -r /*; run -all; quit -code 0' \
+	  work.$(TOP_$*)
+	@cd "$(BUILD_DIR)/$*" && $(VSIM) -gui -view waves.wlf \
+	  -do 'add wave -r /*'
+
+# Coverage uses its own instrumented library so ordinary runs stay fast.
+$(BUILD_DIR)/%/.covered: $(SOURCES) $(ROOT)/Makefile
+	$(if $(filter $*,$(TESTS)),,$(error Unknown test '$*'; run make list))
+	@mkdir -p "$(BUILD_DIR)/$*/coverage"
+	@cd "$(BUILD_DIR)/$*/coverage" && $(VLIB) work && \
+	  $(VLOG) $(VLOG_FLAGS) +cover=$(COVER_TYPES) -work work -l package.log \
+	    +incdir+"$(ROOT)" "$(ROOT)/packages/cache_pkg.sv" && \
+	  $(VLOG) $(VLOG_FLAGS) +cover=$(COVER_TYPES) -work work -l compile.log \
+	    +incdir+"$(ROOT)" +define+CACHE_PKG_SV \
+	    $(EXTRA_$*) "$(ROOT)/$(TB_$*)"
+	@touch "$@"
+
+%.cov: $(BUILD_DIR)/%/.covered
+	@cd "$(BUILD_DIR)/$*/coverage" && $(VSIM) -c -coverage $(VSIM_FLAGS) \
+	  -sv_seed $(SEED) -l coverage.log \
+	  -do 'onerror {quit -code 1}; onbreak {quit -code 2}; coverage save -onexit coverage.ucdb; run -all; quit -code 0' \
+	  work.$(TOP_$*)
+	@cd "$(BUILD_DIR)/$*/coverage" && $(VCOVER) report -html coverage.ucdb
+	@echo 'Coverage report: $(BUILD_DIR)/$*/coverage/covhtmlreport/index.html'
+
+clean:
+	rm -rf "$(BUILD_DIR)"
