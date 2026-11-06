@@ -2,27 +2,31 @@
    Miss Request FIFO
    Tag array miss
    - Miss req accepts line addr and miss_way only when !full
-   - TODO : Might have to accept more than just line addr for the case when
-   we coalesce tail end of the FIFO and Memory sends out of order return to
-   the tail of ROB but also to middle of ROB, in which case we would have to fill both
-   ROB entries.
-   If we don't, that would result in eviction of the data after oldest entry
-   and the data wont be present for younger entry
+   - DECIDED: entries stay {line_addr, miss_way}. Tail-end coalescing is not
+   needed because the tag array already coalesces misses: a second request
+   to a pending line HITS the reserved tag (hit=1, ready=0) and never issues
+   another miss, so one line never occupies two ROB entries. The RTL flags a
+   queued duplicate with a sim-only $error (check_no_duplicate_miss).
    - Asserts accepted to fragment entry preparation buffer (miss_accepted & hit & hit_way
    are control signals for fragment commit)
    Memory request
    - Memory handshakes with FIFO, whenever available,
     with MR FIFO which pops off FIFO tail
-   - TODO : backend must be fleshed out more
+   - Backend: src/miss_path.sv implements it (memory request = tail valid &&
+   !rob_full, miss_pop = mem ready && !rob_full, ROB, in-order refill of the
+   tag + data arrays). Integration is checked in testbenches/hit_path_temp.sv;
+   the ROB alone in testbenches/reorder_buffer_tb.sv.
 
    - Test simultaneous miss & memory handshake, ie push & pop simultaneously
    - Test memory free to accept when FIFO empty
    - Test simulataneous tag miss and memory available when MR FIFO empty
-   - TODO : 2 options, we can bypass requests directly to memory, or wait until FIFO has
-   4 entries to perform tail end coalescing (or just have a separate buffer tracking last 4 requests
-   and if any match, then we dont send them)
+   - DECIDED: no empty-FIFO bypass to memory and no tail-end coalescing.
+   Coalescing is redundant (see above). A bypass would only save one cycle
+   on a memory round trip; it is not worth the extra mux and comb path.
+   FULL_BYPASS (push+pop while full) exists as a parameter, default off,
+   and is tested below with a DEPTH = 2 instance.
 
-   NOTE: there is no bypass today, so "tag miss and memory available while
+   NOTE: there is no empty bypass today, so "tag miss and memory available while
    empty" must result in a push only; the request becomes visible at the tail
    one cycle later. This TB checks that. It also checks the current
    (ROB-less) pop qualification: miss_pop && miss_tail_valid.
@@ -34,9 +38,8 @@
      the pop happens -> count = DEPTH-1 (same ready semantics as frag_fifo)
    - miss_tail_addr / miss_tail_way are zero while empty (no stale entry leak)
    - miss_way is carried with its address through a full wrap of the pointers
-   - duplicate line address pushed twice is stored twice (FIFO does NOT
-     coalesce today; this pins down the behaviour until tail-end coalescing is
-     decided)
+   - duplicate line address pushed twice is stored twice AND the sim-only
+     check_no_duplicate_miss $error fires (expected-error run)
    - misaligned miss_addr (low OFFSET_W bits non-zero) with miss_valid high:
      the sim-only $fatal fires. Needs its own run / expected-failure wrapper.
    - async reset while entries are queued: empty, count = 0, miss_tail_valid
@@ -64,6 +67,17 @@ module miss_request_fifo_tb;
     logic [COUNT_W-1:0] count;
 
     miss_request_fifo dut (.*);
+
+    // FULL_BYPASS = 1 instance, DEPTH = 2, directed test only.
+    logic bp_valid = 0, bp_ready, bp_pop = 0, bp_tail_valid, bp_full, bp_empty;
+    logic [ADDR_W-1:0] bp_addr = '0, bp_tail_addr;
+    logic [WAY_W-1:0] bp_way = '0, bp_tail_way;
+    logic [1:0] bp_count;
+    miss_request_fifo #(.DEPTH(2), .FULL_BYPASS(1'b1)) dut_bypass (
+        .clk(clk), .n_rst(n_rst), .miss_valid(bp_valid), .miss_ready(bp_ready),
+        .miss_addr(bp_addr), .miss_way(bp_way), .miss_pop(bp_pop),
+        .miss_tail_valid(bp_tail_valid), .miss_tail_addr(bp_tail_addr),
+        .miss_tail_way(bp_tail_way), .full(bp_full), .empty(bp_empty), .count(bp_count));
 
     typedef struct packed {
         logic [ADDR_W-1:0] addr;
@@ -133,6 +147,34 @@ module miss_request_fifo_tb;
         check_status("after reset");
     endtask
 
+    task automatic bypass_test;
+        model_entry_t exp [$], e;
+        for (int i = 0; i < 10; i++) begin
+            checks++;
+            e = make_req(5000 + i);
+            bp_valid = 1; bp_addr = e.addr; bp_way = e.way;
+            bp_pop = (exp.size() == 2); #1;
+            if (!bp_ready) begin errors++; $error("[bypass] push refused (size %0d)", exp.size()); end
+            if (bp_pop) begin
+                if (bp_tail_addr !== exp[0].addr || bp_tail_way !== exp[0].way) begin
+                    errors++; $error("[bypass] order broken at %0d", i);
+                end
+                void'(exp.pop_front());
+            end
+            exp.push_back(e);
+            @(posedge clk); #1;
+        end
+        bp_valid = 0; bp_pop = 1;
+        while (exp.size() > 0) begin
+            #1;
+            if (bp_tail_addr !== exp[0].addr) begin errors++; $error("[bypass] drain order"); end
+            void'(exp.pop_front());
+            @(posedge clk); #1;
+        end
+        bp_pop = 0;
+        if (!bp_empty) begin errors++; $error("[bypass] not empty after drain"); end
+    endtask
+
     initial begin
         reset_fifo();
 
@@ -161,6 +203,9 @@ module miss_request_fifo_tb;
         for (int c = 0; c < 2000; c++)
             step(($urandom_range(99) < 55), ($urandom_range(99) < 50), "random");
         while (model.size() > 0) step(0, 1, "final drain");
+
+        // ---- FULL_BYPASS = 1: push+pop while full both fire ----
+        bypass_test();
 
         if (errors == 0)
             $display("PASS miss_request_fifo_tb: %0d checks, %0d pushes, %0d pops", checks, pushes, pops);

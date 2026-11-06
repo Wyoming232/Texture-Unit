@@ -25,14 +25,16 @@
                 lru[2]=0 -> way 2 (evicts L3)
 
     NOTE on the array test: same-bank groups are serialized starting from
-    that bank's round-robin route_ptr, which is NOT reset between pixels, so
-    which group is looked up first (and gets the lowest free way) depends on
-    history. rsp[i] still corresponds to req[i]. The TB therefore checks
-    "all distinct ways + matching miss stream" for same-bank groups rather
-    than a fixed way per group.
+    route_ptr, which is cleared when each pixel is accepted, so same-bank
+    groups are looked up in ascending group order. The TB checks "all
+    distinct ways + matching miss stream" and, for the 4-in-one-bank pixel
+    on a fresh set, the exact ways 0,1,2,3 in group order.
 
-    TODO : PLRU coverage gap - the listed sequence never depends on the way-2 commit bit
-    (lru[0] for 2'd2); the explicit PLRU order tests below would close it.
+    PLRU order tests (fresh, fully filled sets, then hits, then one miss):
+    - hits w0,w1,w2,w3 -> miss evicts w0
+    - hits w3,w2,w1,w0 -> miss evicts w3 (depends on lru[2] set by the w2 commit)
+    - hits w3,w0,w2    -> miss evicts w1 (depends on lru[0] set by the w2
+      commit; without it the root would point right and pick w3)
 
     Additional testcases (added, to be reviewed; NOT implemented below)
     Tag bank
@@ -256,11 +258,10 @@ module tag_array_tb;
         miss_t m; m.addr = addr; m.way = WAY_W'(way); exp.push_back(m);
     endfunction
 
-    // Same-bank groups are serialized starting from that bank's round-robin
-    // route_ptr, which persists across pixels, so the ORDER (and therefore
-    // which group gets which fresh way) depends on history. Check instead that
-    // every listed group missed and that their ways are all distinct; the
-    // miss stream is then expected to carry exactly those (addr, way) pairs.
+    // Same-bank groups are serialized (ascending group order, route_ptr is
+    // cleared per pixel). Check that every listed group missed and that their
+    // ways are all distinct; the miss stream is then expected to carry exactly
+    // those (addr, way) pairs. Exact ways are checked separately on fresh sets.
     task automatic expect_serialized_misses(input string name, input tag_lookup_t [LANES-1:0] r,
                                             input tag_out_t [LANES-1:0] got, input int groups [$]);
         logic [WAYS-1:0] seen = '0;
@@ -276,6 +277,30 @@ module tag_array_tb;
             seen[got[g].hit_way] = 1'b1;
             add_exp({r[g].tag, r[g].index, r[g].bank, {OFFSET_W{1'b0}}}, int'(got[g].hit_way));
         end
+    endtask
+
+    // Fill bank/index 3 with four ready lines (tags base..base+3 -> ways 0..3),
+    // hit the ways in hit_order, then miss with tag base+4 and check the victim.
+    task automatic plru_order(input string name, input int bank, input int base_tag,
+                              input int hit_order [$], input int exp_victim);
+        tag_lookup_t [LANES-1:0] r;
+        tag_out_t [LANES-1:0] got;
+        int c;
+        for (int w = 0; w < 4; w++) begin
+            r = '0; r[0] = group(4'b0001, line(base_tag + w, 3, bank));
+            request(name, r, got, c);
+            expect_group({name, " alloc"}, 0, got[0], 0, 0, w);
+        end
+        for (int w = 0; w < 4; w++) fill(bank, 3, w);
+        foreach (hit_order[i]) begin
+            r = '0; r[0] = group(4'b0001, line(base_tag + hit_order[i], 3, bank));
+            request(name, r, got, c);
+            expect_group({name, " hit"}, 0, got[0], 1, 1, hit_order[i]);
+        end
+        r = '0; r[0] = group(4'b0001, line(base_tag + 4, 3, bank));
+        request(name, r, got, c);
+        expect_group({name, " victim"}, 0, got[0], 0, 0, exp_victim);
+        miss_log.delete(); bank_log.delete();
     endtask
 
     // Bank test: bank 0, index 0, tags 1..5
@@ -369,6 +394,8 @@ module tag_array_tb;
         for (int g = 0; g < 4; g++) req[g] = group(4'b0001 << g, line(16'h20 + g, 6, 1));
         request("same bank", req, rsp, cyc);
         exp = {}; expect_serialized_misses("same bank", req, rsp, {0, 1, 2, 3});
+        // route_ptr is cleared per pixel: ascending group order on a fresh set.
+        for (int g = 0; g < 4; g++) expect_group("same bank order", g, rsp[g], 0, 0, g);
         expect_misses("same bank", exp); expect_bank_results("same bank", req);
         checks++; if (cyc < 8) begin errors++; $error("same-bank pixel finished suspiciously fast (%0d cycles)", cyc); end
 
@@ -399,6 +426,13 @@ module tag_array_tb;
         exp = {}; expect_serialized_misses("2+2", req, rsp, {0, 1});
         expect_serialized_misses("2+2", req, rsp, {2, 3});
         expect_misses("2+2", exp); expect_bank_results("2+2", req);
+
+        // ------------------------------------------------------------------
+        // PLRU order tests (index 3, banks 0/1/2 are untouched so far)
+        // ------------------------------------------------------------------
+        plru_order("plru w0..w3", 0, 16'h60, '{0, 1, 2, 3}, 0);
+        plru_order("plru w3..w0", 1, 16'h70, '{3, 2, 1, 0}, 3);
+        plru_order("plru w3,w0,w2", 2, 16'h80, '{3, 0, 2}, 1);
 
         if (errors == 0)
             $display("PASS tag_array_tb: %0d checks", checks);

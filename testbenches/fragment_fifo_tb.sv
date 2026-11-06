@@ -59,6 +59,18 @@ module fragment_fifo_tb;
 
     frag_fifo dut (.*);
 
+    // FULL_BYPASS = 1 instance, DEPTH = 2, directed test only.
+    logic bp_valid_in = 0, bp_ready_in, bp_batch_committed, bp_pop = 0, bp_tail_valid;
+    logic bp_full, bp_empty;
+    logic [1:0] bp_count;
+    frag_data_t bp_frag_in = '0, bp_tail_data;
+    frag_fifo #(.DEPTH(2), .FULL_BYPASS(1'b1)) dut_bypass (
+        .clk(clk), .n_rst(n_rst), .valid_in(bp_valid_in), .ready_in(bp_ready_in),
+        .frag_in(bp_frag_in), .batch_committed(bp_batch_committed), .pop(bp_pop),
+        .tail_valid(bp_tail_valid), .tail_data(bp_tail_data), .full(bp_full),
+        .empty(bp_empty), .count(bp_count));
+
+
     // Reference model: SystemVerilog queue of the entries we expect inside.
     frag_data_t model [$];
     int errors = 0, checks = 0, pushes = 0, pops = 0;
@@ -128,6 +140,38 @@ module fragment_fifo_tb;
         check_status(where);
     endtask
 
+    // Fill the 2-deep bypass FIFO, then push+pop while full every cycle:
+    // both must fire, count stays 2, and order is preserved.
+    task automatic bypass_test;
+        frag_data_t exp [$];
+        for (int i = 0; i < 2; i++) begin
+            bp_frag_in = make_frag(100 + i); bp_valid_in = 1; #1;
+            if (!bp_ready_in) begin errors++; $error("[bypass] refused while not full"); end
+            exp.push_back(bp_frag_in);
+            @(posedge clk); #1;
+        end
+        for (int i = 2; i < 10; i++) begin
+            checks++;
+            bp_frag_in = make_frag(100 + i); bp_valid_in = 1; bp_pop = 0; #1;
+            if (!bp_full || bp_ready_in) begin errors++; $error("[bypass] full without pop must refuse"); end
+            bp_pop = 1; #1;
+            if (!bp_ready_in) begin errors++; $error("[bypass] push+pop on full refused"); end
+            if (bp_tail_data !== exp[0]) begin errors++; $error("[bypass] order broken at %0d", i); end
+            void'(exp.pop_front()); exp.push_back(bp_frag_in);
+            @(posedge clk); #1;
+            if (bp_count !== 2'd2) begin errors++; $error("[bypass] count=%0d expected 2", bp_count); end
+        end
+        bp_valid_in = 0;
+        while (exp.size() > 0) begin
+            bp_pop = 1; #1;
+            if (bp_tail_data !== exp[0]) begin errors++; $error("[bypass] drain order"); end
+            void'(exp.pop_front());
+            @(posedge clk); #1;
+        end
+        bp_pop = 0;
+        if (!bp_empty) begin errors++; $error("[bypass] not empty after drain"); end
+    endtask
+
     task automatic reset_fifo;
         n_rst = 0; valid_in = 0; pop = 0;
         model.delete();
@@ -172,6 +216,9 @@ module fragment_fifo_tb;
         for (int c = 0; c < 2000; c++)
             step(($urandom_range(99) < 55), ($urandom_range(99) < 50), "random");
         while (model.size() > 0) step(0, 1, "final drain");
+
+        // ---- FULL_BYPASS = 1: push+pop while full both fire ----
+        bypass_test();
 
         if (errors == 0)
             $display("PASS fragment_fifo_tb: %0d checks, %0d pushes, %0d pops", checks, pushes, pops);
