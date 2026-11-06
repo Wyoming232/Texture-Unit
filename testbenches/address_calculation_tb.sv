@@ -23,6 +23,18 @@
     | Coordinate-caused overflow | `0` | `(0,0x4000)`; `(0x8000,0)` | Error for each |
     | Base-addition overflow | `0xFFFFFFF8` | `(0,0)`; `(1,0)` | First valid; second errors |
     | Misaligned base | `1`, `2`, `4`, `7` | `(0,0)` | Error for each |
+    (all rows above use a full 16/16 mip: log2_width = log2_height = 16)
+
+    Mip-aware Morton (selected-mip log2_width/log2_height)
+    | What to test | dims (w x h) | Tap `(x,y)` | Expected byte address / result |
+    |---|---|---|---|
+    | Diagram mip 0 (4x4) | 4x4 | `(0,1)`; `(2,0)`; `(0,2)`; `(3,3)` | texel 2, 4, 8, 15 -> `0x10`; `0x20`; `0x40`; `0x78` |
+    | Wide (8x2): x bits above the square part are appended | 8x2 | `(5,1)` | texel 0b1011 = 11 -> `0x58` |
+    | Tall (2x8): y bits appended | 2x8 | `(1,5)` | texel 0b1011 = 11 -> `0x58` |
+    | 1x1 mip | 1x1 | `(0,0)` | `base` |
+    | Coordinate outside mip | 8x2 | `(8,0)`; `(0,2)` | Error for each |
+    | Mip wider than 16-bit coordinates | 2^17 x 1 | `(0,0)` | Error |
+    | Random dims 0..16, in-range coordinates, random aligned base | | | matches morton_ref |
     
     Coalescing (lines 0, 1, 2, 3)
     - no coalescing
@@ -68,6 +80,7 @@ module address_calculation_tb;
 
     // --------------------------- DUT: full pixel path ---------------------------
     logic [31:0] base_addr;
+    logic [4:0] log2_width, log2_height;
     pixel_taps_t pixel_tap_sel;
     tmu_pixel_metadata_t pixel_metadata_sel;
     logic [BATCH_ID_W-1:0] batch_id;
@@ -78,14 +91,15 @@ module address_calculation_tb;
 
     // --------------------------- DUT: single addr_calc ---------------------------
     logic [15:0] ac_x, ac_y;
+    logic [4:0] ac_lw = 5'd16, ac_lh = 5'd16;
     logic [31:0] ac_base;
     addr_calc_out_t ac_out;
-    addr_calc single (.x(ac_x), .y(ac_y), .base_addr(ac_base), .addr_out(ac_out));
+    addr_calc single (.x(ac_x), .y(ac_y), .log2_width(ac_lw), .log2_height(ac_lh),
+                      .base_addr(ac_base), .addr_out(ac_out));
 
     int errors = 0;
     int checks = 0;
 
-    // TODO : Morton index calculation is currently hardcoded for 16-bit x and y. This should be parameterized for different texture sizes.
     // ------------------------------- ADDR GEN -------------------------------
     // Drives one tap through a standalone addr_calc and checks every decoded
     // field against the byte address given in the table above.
@@ -112,6 +126,30 @@ module address_calculation_tb;
                        ac_out.bank, ac_out.index, ac_out.tag, exp_byte);
             end
         end
+    endtask
+
+    // Independent reference: walk the coordinate bits from LSB up and append
+    // x then y while each axis still has bits in the mip. This yields the
+    // square interleave for b < min(lw,lh) and appends the longer axis above.
+    function automatic logic [35:0] morton_ref(input logic [15:0] x, y, input int lw, lh);
+        logic [35:0] idx = '0;
+        int pos = 0;
+        for (int b = 0; b < 16; b++) begin
+            if (b < lw) begin idx[pos] = x[b]; pos++; end
+            if (b < lh) begin idx[pos] = y[b]; pos++; end
+        end
+        return idx;
+    endfunction
+
+    task automatic check_mip_addr(input string name, input int lw, lh,
+                                  input logic [31:0] base, input logic [15:0] x, y,
+                                  input bit exp_err);
+        logic [35:0] full;
+        ac_lw = 5'(lw); ac_lh = 5'(lh);
+        full = {4'b0, base} + (morton_ref(x, y, lw, lh) << 3);
+        // A carry past bit 31 is an error even for in-range coordinates.
+        check_addr(name, base, x, y, full[31:0], exp_err || (|full[35:32]));
+        ac_lw = 5'd16; ac_lh = 5'd16;
     endtask
 
     // ------------------------------- COALESCING -------------------------------
@@ -151,9 +189,9 @@ module address_calculation_tb;
                                 (((line_sel[tap] & 2) != 0) ? 512 : 0)) + base_addr;
             exp_line[tap] = {exp_line[tap][31:7], 7'b0};
         end
-        if (coa_addr_out.used !== 4'b1111 || coa_addr_out.addr_error !== 4'b0000) begin
+        if (coa_addr_out.tap_mask !== 4'b1111 || coa_addr_out.addr_error !== 4'b0000) begin
             errors++;
-            $error("[%s] used=%b addr_error=%b", name, coa_addr_out.used, coa_addr_out.addr_error);
+            $error("[%s] tap_mask=%b addr_error=%b", name, coa_addr_out.tap_mask, coa_addr_out.addr_error);
         end
         seen = '0;
         for (int group = 0; group < 4; group++) begin
@@ -195,6 +233,8 @@ module address_calculation_tb;
     initial begin
         // Fixed metadata for the fragment entry
         base_addr = '0;
+        log2_width = 5'd16;
+        log2_height = 5'd16;
         batch_id = 8'h3C;
         pixel_id = 2'd1;
         pixel_tap_sel = '0;
@@ -230,6 +270,34 @@ module address_calculation_tb;
         check_addr("misaligned 2",    32'h2, 16'd0, 16'd0, 32'h0, 1);
         check_addr("misaligned 4",    32'h4, 16'd0, 16'd0, 32'h0, 1);
         check_addr("misaligned 7",    32'h7, 16'd0, 16'd0, 32'h0, 1);
+
+        // ---------------- Mip-aware Morton ----------------
+        ac_lw = 5'd2; ac_lh = 5'd2;
+        check_addr("4x4 (0,1)",       32'h0, 16'd0, 16'd1, 32'h10, 0);
+        check_addr("4x4 (2,0)",       32'h0, 16'd2, 16'd0, 32'h20, 0);
+        check_addr("4x4 (0,2)",       32'h0, 16'd0, 16'd2, 32'h40, 0);
+        check_addr("4x4 (3,3)",       32'h0, 16'd3, 16'd3, 32'h78, 0);
+        ac_lw = 5'd3; ac_lh = 5'd1;
+        check_addr("8x2 (5,1)",       32'h0, 16'd5, 16'd1, 32'h58, 0);
+        check_addr("8x2 x out",       32'h0, 16'd8, 16'd0, 32'h0, 1);
+        check_addr("8x2 y out",       32'h0, 16'd0, 16'd2, 32'h0, 1);
+        ac_lw = 5'd1; ac_lh = 5'd3;
+        check_addr("2x8 (1,5)",       32'h0, 16'd1, 16'd5, 32'h58, 0);
+        ac_lw = 5'd0; ac_lh = 5'd0;
+        check_addr("1x1",             32'h40, 16'd0, 16'd0, 32'h40, 0);
+        ac_lw = 5'd17; ac_lh = 5'd0;
+        check_addr("dims > 16 bits",  32'h0, 16'd0, 16'd0, 32'h0, 1);
+        ac_lw = 5'd16; ac_lh = 5'd16;
+        for (int i = 0; i < 2000; i++) begin
+            int lw, lh;
+            logic [15:0] rx, ry;
+            lw = $urandom_range(16); lh = $urandom_range(16);
+            rx = 16'($urandom) & 16'((32'd1 << lw) - 1);
+            ry = 16'($urandom) & 16'((32'd1 << lh) - 1);
+            // keep base + texture inside 32 bits: base < 2^31, texture < 2^30 for lw+lh <= 27
+            check_mip_addr("random mip", lw, lh,
+                           (lw + lh <= 27) ? {1'b0, 28'($urandom), 3'b0} : 32'h0, rx, ry, 0);
+        end
 
         // ---------------- Coalescing ----------------
         // line_sel per tap; equal values share a line.
