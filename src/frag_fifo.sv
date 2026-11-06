@@ -3,14 +3,19 @@
 module frag_fifo #(
     parameter int DEPTH = cache_pkg::FRAG_DEPTH,
     parameter int PTR_W = (DEPTH > 1) ? $clog2(DEPTH) : 1,
-    parameter int COUNT_W = $clog2(DEPTH + 1)
+    parameter int COUNT_W = $clog2(DEPTH + 1),
+    // 0: ready_in = !full (registered state only). 1: also ready while full
+    // if the tail is popped this cycle (full throughput, but adds a
+    // combinational pop -> ready_in path).
+    parameter bit FULL_BYPASS = 1'b0
 ) (
     input logic clk, n_rst,
     input logic valid_in,
     output logic ready_in,
     input cache_pkg::frag_data_t frag_in,
     output logic batch_committed,
-    // TODO: connect pop to the future backend's accepted ownership transfer.
+    // pop = the backend took ownership of tail_data this cycle (hit_path_temp:
+    // the read-issue stage captured the pixel). Ignored while empty.
     input logic pop,
     output logic tail_valid,
     output cache_pkg::frag_data_t tail_data,
@@ -23,11 +28,12 @@ module frag_fifo #(
     logic [PTR_W-1:0] wr_ptr, rd_ptr;
     logic push_fire, pop_fire;
 
-    // TODO : ready is derived from registered count, so push+pop in the same cycle while
-    // full performs the pop only (push refused). Add a bypass if full-throughput is required.
+    // With FULL_BYPASS = 0, push+pop in the same cycle while full performs
+    // the pop only. With FULL_BYPASS = 1 both fire; the write lands in the
+    // slot being popped, which the consumer has already sampled this cycle.
     assign full = count == COUNT_W'(DEPTH);
     assign empty = count == '0;
-    assign ready_in = n_rst && !full;
+    assign ready_in = n_rst && (!full || (FULL_BYPASS && pop));
     assign tail_valid = n_rst && !empty;
     assign push_fire = valid_in && ready_in;
     assign pop_fire = pop && tail_valid;

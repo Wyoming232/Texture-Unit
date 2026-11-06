@@ -1,35 +1,3 @@
-// `ifndef CACHE_PKG_SV
-// `define CACHE_PKG_SV
-
-// package cache_pkg;
-
-//   //general parameters
-//   parameter ADDR_W = 32;
-//   parameter CACHE_BYTES = 16384;
-//   parameter LINE_BYTES = 128;
-//   parameter WAYS = 4;
-//   parameter BANKS = 4;
-//   parameter LANES = 4;
-//   parameter TEXEL_BYTES = 8; 
-
-//   //fragment fifo parameters
-//   parameter FRAG_DEPTH = 32;
-//   parameter FRAG_WIDTH = 5;
-
-//   //MISS REQ FIFO && ROB parameters
-//   parameter MISS_REQ_DEPTH = 32;
-//   parameter ROB_DEPTH = 32;
-//   parameter ID_WIDTH = 32; // TODO : Determine ID_W
-
-//   // ROB entry
-//   typedef struct packed {
-//       logic valid,
-//       logic [ADDR_W:0] line_addr,
-//       logic [1023:0] data
-//   } rob_entry;
-
-// endpackage : cache_pkg
-
 `timescale 1ns/1ps
 `ifndef CACHE_PKG_SV
 `define CACHE_PKG_SV
@@ -97,8 +65,10 @@ package cache_pkg;
         logic [4:0]  mip_0_log2_width;
         logic [31:0] base_addr;
         // Actual selected mip and its dimensions, not mip-zero dimensions.
+        // log2_width/log2_height drive the per-mip Morton swizzle in addr_calc.
+        // max_mip_level is only range-checked in simulation (mip_base_addr).
+        // OPEN QUESTION (Alec): can the TMU drop max_mip_level from the request?
         logic [4:0] mip_level;
-        // TODO : ASK ALEC IF SIGNALS ARE NECESSARY, CURRENTLY UNUSED IN THE CACHE
         logic [4:0]  max_mip_level;
         logic [4:0] log2_width, log2_height;
     } base_address_t;
@@ -149,12 +119,13 @@ package cache_pkg;
 
     // ONE PIXEL at ONE MIP, containing up to four unique-line groups.
     // Metadata and offsets are stored once, rather than repeated per line.
-    // (TODO : rename used to tap_mask)
+    // tap_mask: taps requested by the filter mode (nearest 0001, else 1111),
+    // in original tap order. lines[g].tap_mask is the per-group subset.
     typedef struct packed {
         logic [BATCH_ID_W-1:0] batch_id;
         logic [1:0] pixel_id;
         tmu_pixel_metadata_t pixel_metadata;
-        logic [LANES-1:0] used;
+        logic [LANES-1:0] tap_mask;
         logic [LANES-1:0] addr_error;
         logic [LANES-1:0][OFFSET_W-1:0] offset;
         coalesced_line_t [LANES-1:0] lines;
@@ -163,10 +134,10 @@ package cache_pkg;
     // ----------------------TAG ARRAY----------------------
     // Only these fields are consumed by tag lookup/allocation.
     // valid disables empty groups; it is distinct from channel req_valid.
-    // TODO : tag_array.sv reads req[g].tap_mask, which this struct does not have.
-    // Adding it changes $bits to 30 (coalescer_tb asserts 26) and the adapter must drive it.
+    // tap_mask is forwarded unchanged by tag_array as bank_tap_mask.
     typedef struct packed {
         logic valid;
+        logic [LANES-1:0] tap_mask;
         logic [BANK_W-1:0] bank;
         logic [INDEX_W-1:0] index;
         logic [TAG_W-1:0] tag;
@@ -203,19 +174,42 @@ package cache_pkg;
     } frag_data_t;
     typedef frag_data_t frag_entry_t;
 
-    // TODO : miss_request_fifo.sv uses miss_req_entry_t {line_addr, miss_way}; it is not defined.
-    // TODO : define structs for MISS REQ FIFO
     // ----------------------MISS REQUEST FIFO----------------------
-    
+    // Packed as {miss_addr, miss_way} by miss_request_fifo. No extra fields are
+    // needed for coalescing: a second request to a pending line HITS the
+    // reserved tag (hit=1, ready=0) and never produces a second miss, so the
+    // miss stream holds no duplicate in-flight line addresses.
+    typedef struct packed {
+        logic [ADDR_W-1:0] line_addr;
+        logic [WAY_W-1:0] miss_way;
+    } miss_req_entry_t;
+
     // ----------------------ROB----------------------
     parameter integer ROB_DEPTH=32;
+    // The memory transaction id is the ROB slot index (miss_path diagram: 5 bits).
+    localparam integer ROB_ID_W=(ROB_DEPTH>1)?$clog2(ROB_DEPTH):1;
     // valid: allocated; completed: full memory line received.
+    // way: tag-array way reserved for this line; refill writes exactly it.
     typedef struct packed {
         logic valid;
         logic completed;
         logic [ADDR_W-1:0] line_addr;
+        logic [WAY_W-1:0] way;
         logic [LINE_BITS-1:0] data;
     } rob_entry_t;
+
+    // ----------------------T$ -> TMU RETURN----------------------
+    // One transfer returns one whole quad at one mip (same granularity as the
+    // request). Quad metadata is sent once; per-pixel fractions are kept.
+    // texel_valid = tap requested AND address valid. Texels of invalid taps
+    // are returned as zero; addr_error reports which taps faulted.
+    typedef struct packed {
+        tmu_quad_metadata_t tmu_quad_metadata;
+        logic [3:0][7:0] u_frac, v_frac;
+        logic [3:0][LANES-1:0] texel_valid;
+        logic [3:0][LANES-1:0] addr_error;
+        logic [3:0][LANES-1:0][TEXEL_BITS-1:0] texels;
+    } texture_cache_return_t;
 
     parameter LANES_W = 2;
     parameter MORTON_W = 4; //number of bits in one texel's slot in tile

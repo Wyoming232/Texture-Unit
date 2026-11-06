@@ -15,10 +15,18 @@ interface tag_array_if;
     // arbitration. hit=1,ready=0 is a pending-line match, not a new miss.
     // Capture the original outcome: allocating a new tag must not change its
     // response from hit=0 to hit=1 before the miss request is retained.
-    // TODO : tag_array.sv drives busy, bank_result, bank_tap_mask, bank_result_valid
-    // and reads bank_result_ready; none are declared here (see documentation/proposed_patches.md).
     logic rsp_valid, rsp_ready;
     cache_pkg::tag_out_t [cache_pkg::LANES-1:0] rsp;
+    // busy: a pixel is held (accepted, response not yet taken).
+    logic busy;
+
+    // Per-bank early results, one handshake per resolved group. A new miss
+    // also needs bank_result_ready (reserved preparation capacity) before it
+    // is offered on the miss channel. Tie bank_result_ready high when the
+    // consumer only uses the complete rsp (as hit_path_temp does).
+    logic [cache_pkg::BANKS-1:0] bank_result_valid, bank_result_ready;
+    cache_pkg::tag_out_t [cache_pkg::BANKS-1:0] bank_result;
+    logic [cache_pkg::BANKS-1:0][cache_pkg::LANES-1:0] bank_tap_mask;
 
     // Stream one newly allocated line to the miss path at a time, including
     // while other groups of this pixel still wait for a bank/set. Each tag
@@ -40,8 +48,9 @@ interface tag_array_if;
     logic [cache_pkg::WAY_W-1:0] fill_way;
 
     modport frontend (
-        output req_valid, req, rsp_ready,
-        input req_ready, rsp_valid, rsp
+        output req_valid, req, rsp_ready, bank_result_ready,
+        input req_ready, rsp_valid, rsp, busy,
+              bank_result_valid, bank_result, bank_tap_mask
     );
 
     modport refill (
@@ -55,9 +64,10 @@ interface tag_array_if;
     );
 
     modport tag_array (
-        input req_valid, req, rsp_ready, miss_ready,
+        input req_valid, req, rsp_ready, miss_ready, bank_result_ready,
               fill_en, fill_bank, fill_idx, fill_way,
-        output req_ready, rsp_valid, rsp, fill_ready,
+        output req_ready, rsp_valid, rsp, fill_ready, busy,
+               bank_result_valid, bank_result, bank_tap_mask,
                miss_valid, miss_addr, miss_way
     );
 endinterface : tag_array_if
