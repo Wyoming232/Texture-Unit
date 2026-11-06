@@ -125,14 +125,18 @@ module hit_path_temp (
 
     // ----------------TAG ARRAY----------------//
     // TODO : TMU HANDSHAKE SIGNALS AND LOGIC
-
+    // TAG ARRAY INPUT 
 
     // ----------------FRAGMENT FIFO----------------//
     // TODO : TMU HANDSHAKE SIGNALS AND LOGIC
+    // FRAGMENT ENTRY PREPARATION BUFFER
 
 
     // ----------------DATA ARRAY----------------//
-    // TODO : PROBABLY WANT A BUFFER TO HOLD DATA ARRAY OUTPUTS
+    // TODO : TMU HANDSHAKE SIGNALS AND LOGIC
+    // DATA ARRAY READ LOGIC
+    // PAYLOAD PREPARATION BUFFER
+    
 
 
 endmodule

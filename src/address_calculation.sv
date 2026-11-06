@@ -2,8 +2,6 @@
 
 import cache_pkg::*;
 
-// TODO : integrate into hit_path_temp
-// TODO : Update for mip scaling
 module address_calculation (
     // input logic clk,
     // input logic n_rst,

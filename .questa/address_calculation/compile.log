@@ -1,0 +1,22 @@
+QuestaSim vlog 2022.4_5 Compiler 2024.06 Jun 21 2024
+Start time: 19:51:58 on Nov 05,2026
+vlog -sv -work work -l compile.log "+incdir+/home/ecegridfs/a/437mg192/Texture-Unit" "+define+CACHE_PKG_SV" /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/address_calculation_tb.sv 
+-- Compiling interface texture_cache_request_if
+-- Importing package cache_pkg
+-- Compiling interface tag_array_if
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/address_calculation_tb.sv(64)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(11): (vlog-13314) Defaulting port 'pixel_tap_sel' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/address_calculation_tb.sv(64)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(12): (vlog-13314) Defaulting port 'pixel_metadata_sel' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/address_calculation_tb.sv(64)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(106): (vlog-13314) Defaulting port 'addr0' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/address_calculation_tb.sv(64)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(106): (vlog-13314) Defaulting port 'addr1' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/address_calculation_tb.sv(64)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(106): (vlog-13314) Defaulting port 'addr2' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/address_calculation_tb.sv(64)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(106): (vlog-13314) Defaulting port 'addr3' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Error: (vlog-13069) ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/address_calculation_tb.sv(64)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(175): near "=": syntax error, unexpected '=', expecting '('.
+End time: 19:51:58 on Nov 05,2026, Elapsed time: 0:00:00
+Errors: 1, Warnings: 6
