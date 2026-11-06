@@ -33,8 +33,11 @@ module tag_array (
     logic [BANKS-1:0][INDEX_W-1:0] bank_idx;
     logic [BANKS-1:0][TAG_W-1:0] bank_tag;
 
-    // TODO : route_ptr persists across pixels, so same-bank groups of a new pixel are
-    // looked up starting from a history-dependent group (rsp[i]<->req[i] still holds). Decide if intended.
+    // Same-bank groups are served in rotating order starting at route_ptr.
+    // route_ptr is cleared when a pixel is accepted, so every pixel's
+    // same-bank groups are looked up in ascending group order (deterministic
+    // way assignment). Cross-pixel fairness is irrelevant: every group of the
+    // held pixel must resolve before the next pixel is accepted.
     always_comb begin : route_pending_groups
         selected = '0;
         selected_group = '0;
@@ -120,6 +123,7 @@ module tag_array (
                 active <= 1'b1;
                 req_q <= tag_if.req;
                 rsp_q <= '0;
+                route_ptr <= '0;   // no bank_fire can coincide: !active
                 for (int g = 0; g < LANES; g++) pending[g] <= tag_if.req[g].valid;
             end
             if (rsp_fire) active <= 1'b0;
@@ -213,8 +217,12 @@ module tag_bank (
     logic found_invalid, choose_left;
     logic alloc_fire;
 
-    // TODO : a set whose four ways are all allocated-but-unfilled stalls the bank (busy) until a
-    // refill lands; the controller must guarantee fills can progress or this deadlocks.
+    // A set whose four ways are all allocated-but-unfilled stalls the bank
+    // (busy) until a refill lands. Forward progress is guaranteed by the miss
+    // path contract (see miss_path.sv): every reserved way already has a miss
+    // descriptor retained in the miss FIFO/ROB, and the refill of the ROB tail
+    // depends only on memory returning data, never on this bank or on the
+    // fragment FIFO. So a stalled set always drains once memory responds.
     // Root bit 1 prefers the left pair; child bit 1 prefers its higher way.
     // Skip a subtree with no eligible ways. Invalid ways take priority.
     always_comb begin : lookup_and_replacement
