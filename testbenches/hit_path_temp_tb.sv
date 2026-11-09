@@ -47,10 +47,36 @@ module hit_path_temp_tb;
         .mem(mem), .protocol_error(protocol_error), .replay_error(replay_error)
     );
 
+
+    integer mem_count;
+    logic [ADDR_W-1:0] held_mem_addr;
+    logic [ROB_ID_W-1:0] held_mem_id;
+    texture_cache_return_t expected_rsp, held_rsp;
+
+    // Observe memory transfers only; memory stimulus stays manual below.
+    always @(posedge clk or negedge n_rst) begin
+        if (!n_rst) mem_count <= 0;
+        else if (mem.req_valid && mem.req_ready) begin
+            assert (mem_count == 0 && mem.req_addr === 32'h1000)
+                else $fatal(1, "Unexpected/duplicate memory request");
+            mem_count <= mem_count + 1;
+        end
+    end
+
+    // A missing handshake must fail instead of hanging the simulation.
+    initial begin
+        #20000;
+        $fatal(1, "hit_path_temp.sv: simulation timeout");
+    end
+
     initial begin
         clk = 1'b0;
         n_rst = 1'b0;
         saved_mem_id = '0;
+        held_mem_addr = '0;
+        held_mem_id = '0;
+        expected_rsp = '0;
+        held_rsp = '0;
         tmu_req.valid = 1'b0;
         tmu_req.payload = '0;
         tmu_rsp.ready = 1'b0;
@@ -59,69 +85,181 @@ module hit_path_temp_tb;
         mem.rsp_id = '0;
         mem.rsp_data = '0;
         @(negedge clk);
+        assert (tmu_rsp.valid === 1'b0 && protocol_error === 1'b0 && replay_error === 1'b0)
+            else $fatal(1, "Reset: top-level status");
         @(negedge clk);
         n_rst = 1'b1;
 
-        // Testcase: every pixel requests texel (0,0) in the same 4x4 mip.
-        // Coordinates/taps remain zero from initialization; only tap 0 is used.
+        // Testcase 1: four nearest pixels share one cold/pending cache line.
         @(negedge clk);
-        tmu_req.payload.texture_header.base_addr = 32'h0000_1000;
+        tmu_req.payload.texture_header.base_addr = 32'h1000;
         tmu_req.payload.texture_header.log2_width = 5'd2;
         tmu_req.payload.texture_header.log2_height = 5'd2;
         tmu_req.payload.texture_header.max_mip_level = 5'd2;
-        tmu_req.payload.mip_level = 5'd0;
         tmu_req.payload.log2_width = 5'd2;
         tmu_req.payload.log2_height = 5'd2;
         tmu_req.payload.filter_mode = FILTER_NEAREST;
         tmu_req.payload.rd = 5'd7;
-        tmu_req.payload.u_frac[0] = 8'd10;
-        tmu_req.payload.u_frac[1] = 8'd11;
-        tmu_req.payload.u_frac[2] = 8'd12;
-        tmu_req.payload.u_frac[3] = 8'd13;
-        tmu_req.payload.v_frac[0] = 8'd20;
-        tmu_req.payload.v_frac[1] = 8'd21;
-        tmu_req.payload.v_frac[2] = 8'd22;
-        tmu_req.payload.v_frac[3] = 8'd23;
+        tmu_req.payload.u_frac = {8'd13,8'd12,8'd11,8'd10};
+        tmu_req.payload.v_frac = {8'd23,8'd22,8'd21,8'd20};
         tmu_req.valid = 1'b1;
-
         fork
             begin : manual_tmu_request
-                // Keep this quad stable through its acceptance edge.
                 wait (tmu_req.ready);
                 @(posedge clk);
                 @(negedge clk);
                 tmu_req.valid = 1'b0;
             end
             begin : manual_memory_response
-                // Accept the one cold-line request; expect req_addr=0x1000.
-                mem.req_ready = 1'b1;
+                // Stall memory acceptance and verify address AND ID are held.
                 wait (mem.req_valid);
+                @(negedge clk);
+                held_mem_addr = mem.req_addr;
+                held_mem_id = mem.req_id;
+                assert (held_mem_addr === 32'h1000 && mem_count === 0)
+                    else $fatal(1, "TC1: cold-line memory address");
+                @(negedge clk);
+                assert (mem.req_valid === 1'b1 && mem.req_addr === held_mem_addr && mem.req_id === held_mem_id)
+                    else $fatal(1, "TC1: stalled memory request changed");
+                mem.req_ready = 1'b1;
                 @(posedge clk);
                 saved_mem_id = mem.req_id;
                 @(negedge clk);
                 mem.req_ready = 1'b0;
+                // Delay refill until ALL four pixels have committed, testing
+                // pending-line hits and quad assembly without duplicate misses.
+                wait (!tmu_req.valid);
+                @(negedge clk);
+                assert (tmu_rsp.valid === 1'b0 && mem_count === 1 && mem.req_valid === 1'b0)
+                    else $fatal(1, "TC1: premature return or duplicate pending-line request");
                 mem.rsp_id = saved_mem_id;
                 mem.rsp_data[63:0] = 64'hCAFE_BABE_1234_5678;
+                mem.rsp_data[127:64] = 64'h20;
+                mem.rsp_data[191:128] = 64'h30;
+                mem.rsp_data[255:192] = 64'h40;
                 mem.rsp_valid = 1'b1;
                 wait (mem.rsp_ready);
                 @(posedge clk);
                 @(negedge clk);
                 mem.rsp_valid = 1'b0;
+                mem.req_ready = 1'b1; // Any unexpected later request is counted.
             end
         join
-
+        expected_rsp = '0;
+        expected_rsp.tmu_quad_metadata.filter_mode = FILTER_NEAREST;
+        expected_rsp.tmu_quad_metadata.rd = 5'd7;
+        expected_rsp.u_frac = {8'd13,8'd12,8'd11,8'd10};
+        expected_rsp.v_frac = {8'd23,8'd22,8'd21,8'd20};
+        expected_rsp.texel_valid = {4{4'b0001}};
+        expected_rsp.texels[0][0] = 64'hCAFE_BABE_1234_5678;
+        expected_rsp.texels[1][0] = 64'hCAFE_BABE_1234_5678;
+        expected_rsp.texels[2][0] = 64'hCAFE_BABE_1234_5678;
+        expected_rsp.texels[3][0] = 64'hCAFE_BABE_1234_5678;
         wait (tmu_rsp.valid);
         @(negedge clk);
-        // Each pixel: texel_valid=0001, texels[p][0]=0xCAFEBABE12345678,
-        // other taps zero, addr_error=0. rd=7 and fractions match the request.
-        // Exactly one memory request; protocol_error=replay_error=0.
+        assert (tmu_rsp.payload === expected_rsp && mem_count === 1 &&
+                protocol_error === 1'b0 && replay_error === 1'b0)
+            else $fatal(1, "TC1: miss/refill/nearest quad");
+        held_rsp = tmu_rsp.payload;
         @(negedge clk);
+        assert (tmu_rsp.valid === 1'b1 && tmu_rsp.payload === held_rsp)
+            else $fatal(1, "TC1: TMU backpressure changed output");
+        @(negedge clk);
+        assert (tmu_rsp.valid === 1'b1 && tmu_rsp.payload === held_rsp)
+            else $fatal(1, "TC1: stalled quad lost");
         tmu_rsp.ready = 1'b1;
         @(negedge clk);
         tmu_rsp.ready = 1'b0;
-        #10;
+        assert (tmu_rsp.valid === 1'b0) else $fatal(1, "TC1: output consumption");
 
-        // Add the next manual testcase here.
+        // Testcase 2: ready cache hits, four different texels, no memory work.
+        tmu_req.payload.rd = 5'd8;
+        tmu_req.payload.x[1][0] = 16'd1;
+        tmu_req.payload.y[2][0] = 16'd1;
+        tmu_req.payload.x[3][0] = 16'd1;
+        tmu_req.payload.y[3][0] = 16'd1;
+        tmu_req.valid = 1'b1;
+        wait (tmu_req.ready);
+        @(posedge clk);
+        @(negedge clk);
+        tmu_req.valid = 1'b0;
+        expected_rsp.tmu_quad_metadata.rd = 5'd8;
+        expected_rsp.texels[1][0] = 64'h20;
+        expected_rsp.texels[2][0] = 64'h30;
+        expected_rsp.texels[3][0] = 64'h40;
+        wait (tmu_rsp.valid);
+        @(negedge clk);
+        assert (tmu_rsp.payload === expected_rsp && mem_count === 1 && mem.req_valid === 1'b0)
+            else $fatal(1, "TC2: ready hits, pixel routing, or unexpected memory work");
+        tmu_rsp.ready = 1'b1;
+        @(negedge clk);
+        tmu_rsp.ready = 1'b0;
+
+        // Testcase 3: bilinear quad, four same-bank taps per pixel serialize.
+        tmu_req.payload.filter_mode = FILTER_BILINEAR;
+        tmu_req.payload.rd = 5'd9;
+        tmu_req.payload.x = '0;
+        tmu_req.payload.y = '0;
+        tmu_req.payload.x[0] = {16'd1,16'd0,16'd1,16'd0};
+        tmu_req.payload.y[0] = {16'd1,16'd1,16'd0,16'd0};
+        tmu_req.payload.x[1] = {16'd1,16'd0,16'd1,16'd0};
+        tmu_req.payload.y[1] = {16'd1,16'd1,16'd0,16'd0};
+        tmu_req.payload.x[2] = {16'd1,16'd0,16'd1,16'd0};
+        tmu_req.payload.y[2] = {16'd1,16'd1,16'd0,16'd0};
+        tmu_req.payload.x[3] = {16'd1,16'd0,16'd1,16'd0};
+        tmu_req.payload.y[3] = {16'd1,16'd1,16'd0,16'd0};
+        tmu_req.valid = 1'b1;
+        wait (tmu_req.ready);
+        @(posedge clk);
+        @(negedge clk);
+        tmu_req.valid = 1'b0;
+        expected_rsp.tmu_quad_metadata.filter_mode = FILTER_BILINEAR;
+        expected_rsp.tmu_quad_metadata.rd = 5'd9;
+        expected_rsp.texel_valid = '1;
+        expected_rsp.texels[0] = {64'h40,64'h30,64'h20,64'hCAFE_BABE_1234_5678};
+        expected_rsp.texels[1] = {64'h40,64'h30,64'h20,64'hCAFE_BABE_1234_5678};
+        expected_rsp.texels[2] = {64'h40,64'h30,64'h20,64'hCAFE_BABE_1234_5678};
+        expected_rsp.texels[3] = {64'h40,64'h30,64'h20,64'hCAFE_BABE_1234_5678};
+        wait (tmu_rsp.valid);
+        @(negedge clk);
+        assert (tmu_rsp.payload === expected_rsp && mem_count === 1 &&
+                protocol_error === 1'b0 && replay_error === 1'b0)
+            else $fatal(1, "TC3: bilinear quad, same-bank reads, or metadata");
+        tmu_rsp.ready = 1'b1;
+        @(negedge clk);
+        tmu_rsp.ready = 1'b0;
+
+        // Testcase 4: all four nearest pixels fault, return without memory work.
+        tmu_req.payload.filter_mode = FILTER_NEAREST;
+        tmu_req.payload.rd = 5'd10;
+        tmu_req.payload.x = '0;
+        tmu_req.payload.y = '0;
+        tmu_req.payload.x[0][0] = 16'd4;
+        tmu_req.payload.x[1][0] = 16'd4;
+        tmu_req.payload.x[2][0] = 16'd4;
+        tmu_req.payload.x[3][0] = 16'd4;
+        tmu_req.valid = 1'b1;
+        wait (tmu_req.ready);
+        @(posedge clk);
+        @(negedge clk);
+        tmu_req.valid = 1'b0;
+        expected_rsp.tmu_quad_metadata.filter_mode = FILTER_NEAREST;
+        expected_rsp.tmu_quad_metadata.rd = 5'd10;
+        expected_rsp.texel_valid = '0;
+        expected_rsp.texels = '0;
+        expected_rsp.addr_error = {4{4'b0001}};
+        wait (tmu_rsp.valid);
+        @(negedge clk);
+        assert (tmu_rsp.payload === expected_rsp && mem_count === 1 && mem.req_valid === 1'b0 &&
+                protocol_error === 1'b0 && replay_error === 1'b0)
+            else $fatal(1, "TC4: fault return/zero texels/no memory work");
+        tmu_rsp.ready = 1'b1;
+        @(negedge clk);
+        tmu_rsp.ready = 1'b0;
+        assert (tmu_rsp.valid === 1'b0 && mem_count === 1)
+            else $fatal(1, "TC4: final output consumption");
+
+        $display("PASS: hit_path_temp_tb");
         $finish;
     end
 endmodule

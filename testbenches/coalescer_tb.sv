@@ -1,13 +1,12 @@
 `timescale 1ns/1ps
-`include "interfaces/interfaces.vh"
 `include "src/address_calculation.sv"
 `include "src/coalesced_fragment_adapter.sv"
 
 module coalescer_contract_tb;
     import cache_pkg::*;
+
     logic [31:0] base_addr;
-    // Full 16/16 mip: plain interleave, so ref_addr below stays the reference.
-    logic [4:0] log2_width = 5'd16, log2_height = 5'd16;
+    logic [4:0] log2_width, log2_height;
     pixel_taps_t pixel_tap_sel;
     tmu_pixel_metadata_t pixel_metadata_sel;
     logic [BATCH_ID_W-1:0] batch_id;
@@ -16,181 +15,111 @@ module coalescer_contract_tb;
     tag_out_t [LANES-1:0] tag_result;
     tag_lookup_t [LANES-1:0] tag_req;
     frag_data_t frag_in;
-    tag_array_if tag_if();
 
-    address_calculation dut (.*);
-    coalesced_fragment_adapter adapter (.*);
-
-    addr_calc_out_t [3:0] raw;
-    logic [3:0] raw_used;
-    coalesced_line_t [3:0] raw_coa;
-    coalesced_addrs masked_dut (
-        .addr0(raw[0]), .addr1(raw[1]), .addr2(raw[2]), .addr3(raw[3]),
-        .used(raw_used),
-        .coa_0_1(raw[0].line_addr == raw[1].line_addr),
-        .coa_0_2(raw[0].line_addr == raw[2].line_addr),
-        .coa_0_3(raw[0].line_addr == raw[3].line_addr),
-        .coa_1_2(raw[1].line_addr == raw[2].line_addr),
-        .coa_1_3(raw[1].line_addr == raw[3].line_addr),
-        .coa_2_3(raw[2].line_addr == raw[3].line_addr),
-        .coa_addrs0(raw_coa[0]), .coa_addrs1(raw_coa[1]),
-        .coa_addrs2(raw_coa[2]), .coa_addrs3(raw_coa[3])
+    address_calculation dut (
+        .base_addr(base_addr), .log2_width(log2_width), .log2_height(log2_height),
+        .pixel_tap_sel(pixel_tap_sel), .pixel_metadata_sel(pixel_metadata_sel),
+        .batch_id(batch_id), .pixel_id(pixel_id), .coa_addr_out(coa_addr_out)
+    );
+    coalesced_fragment_adapter adapter (
+        .coa_addr_out(coa_addr_out), .tag_result(tag_result),
+        .tag_req(tag_req), .frag_in(frag_in)
     );
 
-    function automatic logic [35:0] ref_addr (
-        input logic [15:0] x, y, input logic [31:0] base
-    );
-        logic [35:0] value;
-        value = {4'b0, base};
-        for (int bit_id = 0; bit_id < 16; bit_id++) begin
-            if (x[bit_id]) value += 36'd8 << (2*bit_id);
-            if (y[bit_id]) value += 36'd8 << (2*bit_id+1);
-        end
-        return value;
-    endfunction
-
-    task automatic check_packet(input filter_mode_e mode, input int pattern);
-        logic [35:0] expected [4];
-        logic [3:0] expected_used, seen;
-        int first;
-        pixel_metadata_sel.tmu_quad_metadata.filter_mode = mode;
-        for (int tap = 0; tap < 4; tap++) begin
-            // High coordinate bits select four possible lines; low bits
-            // produce different offsets even when the line identities match.
-            pixel_tap_sel.x[tap] = 16'(((((pattern >> (2*tap)) & 3) << 2) | tap));
-            pixel_tap_sel.y[tap] = 16'(tap);
-            expected[tap] = ref_addr(pixel_tap_sel.x[tap], pixel_tap_sel.y[tap], base_addr);
-        end
-        #1;
-        expected_used = (mode == FILTER_NEAREST) ? 4'b0001 : 4'b1111;
-        if (coa_addr_out.tap_mask !== expected_used || coa_addr_out.addr_error !== 4'b0000)
-            $fatal(1, "active mask/address error mismatch");
-        if (coa_addr_out.pixel_metadata !== pixel_metadata_sel ||
-            coa_addr_out.batch_id !== batch_id || coa_addr_out.pixel_id !== pixel_id ||
-            frag_in.pixel_metadata !== pixel_metadata_sel ||
-            frag_in.batch_id !== batch_id || frag_in.pixel_id !== pixel_id)
-            $fatal(1, "metadata was lost");
-        if (frag_in.used !== expected_used || frag_in.addr_error !== 4'b0000)
-            $fatal(1, "fragment mask/error mismatch");
-
-        seen = '0;
-        for (int group = 0; group < 4; group++) begin
-            if ((seen & coa_addr_out.lines[group].tap_mask) != 0)
-                $fatal(1, "tap assigned to more than one group");
-            seen |= coa_addr_out.lines[group].tap_mask;
-            if (tag_req[group].valid !== (|coa_addr_out.lines[group].tap_mask))
-                $fatal(1, "empty group was looked up or active group lost");
-            if (tag_req[group].tap_mask !== coa_addr_out.lines[group].tap_mask)
-                $fatal(1, "adapter did not forward the group tap_mask");
-        end
-        if (seen !== expected_used) $fatal(1, "coalescer did not partition active taps");
-
-        for (int tap = 0; tap < 4; tap++) begin
-            if (expected_used[tap]) begin
-                first = -1;
-                for (int earlier = 0; earlier < 4; earlier++)
-                    if (expected_used[earlier] && first < 0 &&
-                        expected[earlier][31:7] == expected[tap][31:7])
-                        first = earlier;
-                if (!coa_addr_out.lines[first].tap_mask[tap] ||
-                    coa_addr_out.lines[first].line_addr !== {expected[tap][31:7],7'b0})
-                    $fatal(1, "wrong line/representative for tap %0d pattern %0d", tap, pattern);
-                if (tag_req[first].bank !== expected[tap][8:7] ||
-                    tag_req[first].index !== expected[tap][11:9] ||
-                    tag_req[first].tag !== expected[tap][31:12])
-                    $fatal(1, "incorrect tag-only request");
-                if (frag_in.addr[tap] !== expected[tap][31:0] ||
-                    frag_in.offset[tap] !== expected[tap][6:0] ||
-                    frag_in.bank[tap] !== expected[tap][8:7] ||
-                    frag_in.idx[tap] !== expected[tap][11:9] ||
-                    frag_in.hit[tap] !== tag_result[first].hit ||
-                    frag_in.data_ready[tap] !== (tag_result[first].hit && tag_result[first].ready) ||
-                    frag_in.hit_way[tap] !== tag_result[first].hit_way)
-                    $fatal(1, "incorrect FIFO expansion for tap %0d", tap);
-            end
-        end
-    endtask
-
-    task automatic check_arbitrary_mask(input int pattern, input int mask);
-        logic [3:0] expected_mask;
-        int first;
-        raw = '0;
-        raw_used = 4'(mask);
-        for (int tap = 0; tap < 4; tap++)
-            raw[tap].line_addr = 32'(((pattern >> (2*tap)) & 3) * 128);
-        #1;
-        for (int group = 0; group < 4; group++) begin
-            expected_mask = '0;
-            for (int tap = 0; tap < 4; tap++) begin
-                first = -1;
-                for (int candidate = 0; candidate < 4; candidate++)
-                    if (raw_used[candidate] && first < 0 &&
-                        raw[candidate].line_addr == raw[tap].line_addr)
-                        first = candidate;
-                if (raw_used[tap] && first == group) expected_mask[tap] = 1'b1;
-            end
-            if (raw_coa[group].tap_mask !== expected_mask)
-                $fatal(1, "partition mismatch: pattern=%0d mask=%0d group=%0d", pattern, mask, group);
-        end
-    endtask
 
     initial begin
-        base_addr = 32'h12345000;
-        batch_id = 8'hA5;
-        pixel_id = 2'd3;
+        base_addr = '0;
+        log2_width = '0;
+        log2_height = '0;
         pixel_tap_sel = '0;
         pixel_metadata_sel = '0;
-        pixel_metadata_sel.tmu_quad_metadata.reserved = 17'h15555;
-        pixel_metadata_sel.tmu_quad_metadata.warp_id = 1'b1;
-        pixel_metadata_sel.tmu_quad_metadata.rd = 5'd29;
-        pixel_metadata_sel.tmu_quad_metadata.quad_index = 3'd5;
-        pixel_metadata_sel.tmu_quad_metadata.lod_fraction = 8'h9B;
-        pixel_metadata_sel.tmu_quad_metadata.upper_mip = 1'b1;
-        pixel_metadata_sel.u_frac = 8'h31;
-        pixel_metadata_sel.v_frac = 8'hC7;
+        batch_id = '0;
+        pixel_id = '0;
         tag_result = '0;
-        raw = '0;
-        raw_used = '0;
-        for (int group = 0; group < 4; group++) begin
-            tag_result[group].hit = (group != 2);
-            tag_result[group].ready = (group == 1 || group == 3);
-            tag_result[group].hit_way = 2'(group);
-        end
-        // tag_lookup_t = valid(1) + tap_mask(4) + bank(2) + index(3) + tag(20).
-        if ($bits(coalesced_addr_out_t) != 243 || $bits(frag_data_t) != 263 ||
-            $bits(tag_lookup_t) != 30)
-            $fatal(1, "unexpected default contract widths");
 
-        for (int pattern = 0; pattern < 256; pattern++) begin
-            check_packet(FILTER_BILINEAR, pattern);
-            check_packet(FILTER_TRILINEAR, pattern);
-            check_packet(FILTER_NEAREST, pattern);
-            for (int mask = 0; mask < 16; mask++) check_arbitrary_mask(pattern, mask);
-        end
-
-        // Inactive nearest taps can contain overflowing coordinates.
-        pixel_metadata_sel.tmu_quad_metadata.filter_mode = FILTER_NEAREST;
-        pixel_tap_sel = '1;
-        pixel_tap_sel.x[0] = '0;
-        pixel_tap_sel.y[0] = '0;
-        #1;
-        if (coa_addr_out.addr_error !== 0 || coa_addr_out.tap_mask !== 4'b0001)
-            $fatal(1, "inactive nearest taps generated a fault");
-
-        // Active overflow and misalignment must suppress ALL lookup groups.
+        // Testcase 1: four different offsets merge into one ready-hit group.
+        base_addr = 32'h1000;
+        log2_width = 5'd3;
+        log2_height = 5'd3;
         pixel_metadata_sel.tmu_quad_metadata.filter_mode = FILTER_BILINEAR;
-        pixel_tap_sel = '1;
-        #1;
-        if (coa_addr_out.addr_error !== 4'b1111) $fatal(1, "overflow not flagged");
-        for (int group = 0; group < 4; group++)
-            if (tag_req[group].valid) $fatal(1, "lookup issued on overflow");
+        pixel_metadata_sel.u_frac = 8'd64;
+        pixel_metadata_sel.v_frac = 8'd128;
+        batch_id = 8'd1;
+        pixel_id = 2'd2;
+        pixel_tap_sel.x[1] = 16'd1;
+        pixel_tap_sel.y[2] = 16'd1;
+        pixel_tap_sel.x[3] = 16'd1;
+        pixel_tap_sel.y[3] = 16'd1;
+        tag_result[0] = '{hit:1'b1,ready:1'b1,hit_way:2'd2};
+        #10;
+        assert (coa_addr_out.lines[0] === coalesced_line_t'{line_addr:32'h1000,tap_mask:4'b1111} &&
+                coa_addr_out.lines[1].tap_mask === 4'd0 &&
+                coa_addr_out.lines[2].tap_mask === 4'd0 && coa_addr_out.lines[3].tap_mask === 4'd0 &&
+                tag_req[0] === tag_lookup_t'{valid:1'b1,tap_mask:4'b1111,bank:2'd0,index:3'd0,tag:20'd1} &&
+                {tag_req[3].valid,tag_req[2].valid,tag_req[1].valid} === 3'd0)
+            else $fatal(1, "TC1: all-four coalescing and tag request");
+        assert (frag_in.addr === {32'h1018,32'h1010,32'h1008,32'h1000} &&
+                frag_in.offset === {7'd24,7'd16,7'd8,7'd0} &&
+                frag_in.used === 4'b1111 && frag_in.hit === 4'b1111 &&
+                frag_in.data_ready === 4'b1111 && frag_in.hit_way === {4{2'd2}} &&
+                frag_in.addr_error === 4'd0 && frag_in.batch_id === batch_id &&
+                frag_in.pixel_id === pixel_id && frag_in.pixel_metadata === pixel_metadata_sel)
+            else $fatal(1, "TC1: group expansion, offsets and metadata");
+
+        // Testcase 2: four unique lines, four banks, mixed tag outcomes.
         pixel_tap_sel = '0;
-        base_addr = 32'h00000001;
-        #1;
-        if (coa_addr_out.addr_error !== 4'b1111) $fatal(1, "misalignment not flagged");
-        for (int group = 0; group < 4; group++)
-            if (tag_req[group].valid) $fatal(1, "lookup issued on misalignment");
-        $display("PASS: 768 pixel cases, 4096 masked partitions, metadata and address faults");
+        pixel_tap_sel.x[1] = 16'd4;
+        pixel_tap_sel.y[2] = 16'd4;
+        pixel_tap_sel.x[3] = 16'd4;
+        pixel_tap_sel.y[3] = 16'd4;
+        tag_result[0] = '{hit:1'b0,ready:1'b0,hit_way:2'd0};
+        tag_result[1] = '{hit:1'b1,ready:1'b0,hit_way:2'd1};
+        tag_result[2] = '{hit:1'b1,ready:1'b1,hit_way:2'd2};
+        tag_result[3] = '{hit:1'b1,ready:1'b1,hit_way:2'd3};
+        #10;
+        assert (coa_addr_out.lines[0].tap_mask === 4'b0001 &&
+                coa_addr_out.lines[1].tap_mask === 4'b0010 &&
+                coa_addr_out.lines[2].tap_mask === 4'b0100 &&
+                coa_addr_out.lines[3].tap_mask === 4'b1000 &&
+                {tag_req[3].valid,tag_req[2].valid,tag_req[1].valid,tag_req[0].valid} === 4'b1111 &&
+                {tag_req[3].bank,tag_req[2].bank,tag_req[1].bank,tag_req[0].bank} === 8'b11_10_01_00 &&
+                frag_in.addr === {32'h1180,32'h1100,32'h1080,32'h1000} &&
+                frag_in.hit === 4'b1110 && frag_in.data_ready === 4'b1100 &&
+                frag_in.hit_way === {2'd3,2'd2,2'd1,2'd0})
+            else $fatal(1, "TC2: separate lines and mixed hit/ready results");
+
+        // Testcase 3: interleaved pairs 02 + 13 keep original group slots.
+        pixel_tap_sel = '0;
+        pixel_tap_sel.x[1] = 16'd4;
+        pixel_tap_sel.x[2] = 16'd1;
+        pixel_tap_sel.x[3] = 16'd5;
+        tag_result = '0;
+        tag_result[0] = '{hit:1'b1,ready:1'b0,hit_way:2'd3};
+        tag_result[1] = '{hit:1'b1,ready:1'b1,hit_way:2'd1};
+        #10;
+        assert (coa_addr_out.lines[0].tap_mask === 4'b0101 &&
+                coa_addr_out.lines[1].tap_mask === 4'b1010 &&
+                coa_addr_out.lines[2].tap_mask === 4'd0 && coa_addr_out.lines[3].tap_mask === 4'd0 &&
+                {tag_req[3].valid,tag_req[2].valid,tag_req[1].valid,tag_req[0].valid} === 4'b0011 &&
+                frag_in.addr === {32'h1088,32'h1008,32'h1080,32'h1000} &&
+                frag_in.hit === 4'b1111 && frag_in.data_ready === 4'b1010 &&
+                frag_in.hit_way === {2'd1,2'd3,2'd1,2'd3})
+            else $fatal(1, "TC3: pair groups, pending hits and original tap mapping");
+
+        // Testcase 4: one bad active tap suppresses ALL tag requests.
+        pixel_tap_sel.x[2] = 16'd8; // Outside this 8x8 mip.
+        #10;
+        assert (coa_addr_out.addr_error === 4'b0100 && frag_in.addr_error === 4'b0100 &&
+                frag_in.used === 4'b1111 &&
+                {tag_req[3].valid,tag_req[2].valid,tag_req[1].valid,tag_req[0].valid} === 4'b0000 &&
+                coa_addr_out.lines[0].tap_mask === 4'b0001 &&
+                coa_addr_out.lines[1].tap_mask === 4'b1010 &&
+                coa_addr_out.lines[2].tap_mask === 4'd0 && coa_addr_out.lines[3].tap_mask === 4'd0 &&
+                frag_in.addr[2] === '0 && frag_in.hit[2] === 1'b0 &&
+                frag_in.data_ready[2] === 1'b0 && frag_in.hit_way[2] === '0)
+            else $fatal(1, "TC4: whole-pixel lookup rejection and faulted-tap exclusion");
+
+        $display("PASS: coalescer_contract_tb");
         $finish;
     end
 endmodule

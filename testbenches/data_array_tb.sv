@@ -31,6 +31,13 @@ module data_array_tb;
         .protocol_error(protocol_error)
     );
 
+
+    // A missing handshake must fail instead of hanging the simulation.
+    initial begin
+        #20000;
+        $fatal(1, "data_array_tb.sv: simulation timeout");
+    end
+
     initial begin
         clk = 1'b0;
         n_rst = 1'b0;
@@ -45,29 +52,114 @@ module data_array_tb;
         fill_way = '0;
         fill_line = '0;
         @(negedge clk);
+        assert (rd_rsp_valid === '0 && rd_ready === '0 && fill_ready === 1'b0 && protocol_error === 1'b0)
+            else $fatal(1, "Reset: data array status");
         @(negedge clk);
         n_rst = 1'b1;
 
-        // Testcase: fill bank 0/set 0/way 2, then read its second texel.
+        // Testcase 1: fill bank 0/set 0/way 2, read the second texel + cookie.
         @(negedge clk);
         fill_way = 2'd2;
         fill_line[63:0] = 64'h1111_2222_3333_4444;
         fill_line[127:64] = 64'hAAAA_BBBB_CCCC_DDDD;
+        fill_line[LINE_BITS-1 -: 64] = 64'hDEAD_BEEF_7654_3210;
         fill_valid = 1'b1;
+        #1;
+        assert (fill_ready === 1'b1) else $fatal(1, "TC1: fill acceptance");
         @(negedge clk);
         fill_valid = 1'b0;
         rd_valid[0] = 1'b1;
         rd_way[0] = 2'd2;
         rd_byte_offset[0] = 7'd8;
         rd_cookie[0] = 6'd5;
+        #1;
+        assert (rd_ready[0] === 1'b1) else $fatal(1, "TC1: read acceptance");
         @(negedge clk);
         rd_valid = '0;
-        // For L=1: rd_rsp_valid[0]=1 now, data=0xAAAABBBBCCCCDDDD,
-        // cookie=5. Other response-valid bits=0; protocol_error=0.
-        // For larger L, inspect that response L-1 cycles later.
-        #(L * 10);
+        repeat (L-1) begin // Only latency waiting; no generated stimulus.
+            assert (rd_rsp_valid === '0) else $fatal(1, "TC1: response too early");
+            @(negedge clk);
+        end
+        assert (rd_rsp_valid === 4'b0001 && rd_rsp_data[0] === 64'hAAAA_BBBB_CCCC_DDDD &&
+                rd_rsp_cookie[0] === 6'd5 && protocol_error === 1'b0)
+            else $fatal(1, "TC1: second texel, cookie, or READ_LATENCY");
 
-        // Add the next manual testcase here.
+        // Testcase 2: first and last aligned offsets of the same filled line.
+        @(negedge clk);
+        rd_valid[0] = 1'b1;
+        rd_byte_offset[0] = 7'd0;
+        rd_cookie[0] = 6'd0;
+        @(negedge clk);
+        rd_valid = '0;
+        repeat (L-1) @(negedge clk);
+        assert (rd_rsp_valid === 4'b0001 && rd_rsp_data[0] === 64'h1111_2222_3333_4444 && rd_rsp_cookie[0] === 6'd0)
+            else $fatal(1, "TC2: first texel");
+        @(negedge clk);
+        rd_valid[0] = 1'b1;
+        rd_byte_offset[0] = 7'd120;
+        rd_cookie[0] = 6'd63;
+        @(negedge clk);
+        rd_valid = '0;
+        repeat (L-1) @(negedge clk);
+        assert (rd_rsp_valid === 4'b0001 && rd_rsp_data[0] === 64'hDEAD_BEEF_7654_3210 && rd_rsp_cookie[0] === 6'd63)
+            else $fatal(1, "TC2: last texel/maximum cookie");
+
+        // Testcase 3: fill stalls only its own bank; another bank still reads.
+        @(negedge clk);
+        fill_bank = 2'd1;
+        fill_set = 3'd3;
+        fill_way = 2'd1;
+        fill_line = '0;
+        fill_line[63:0] = 64'h5555_6666_7777_8888;
+        fill_valid = 1'b1;
+        @(negedge clk);
+        fill_bank = 2'd0;
+        fill_set = 3'd0;
+        fill_way = 2'd2;
+        fill_line[63:0] = 64'h9999_AAAA_BBBB_CCCC;
+        rd_valid = 4'b0011;
+        rd_byte_offset[0] = 7'd0;
+        rd_cookie[0] = 6'd10;
+        rd_set[1] = 3'd3;
+        rd_way[1] = 2'd1;
+        rd_byte_offset[1] = 7'd0;
+        rd_cookie[1] = 6'd11;
+        #1;
+        assert (fill_ready === 1'b1 && rd_ready[0] === 1'b0 && rd_ready[1] === 1'b1)
+            else $fatal(1, "TC3: fill priority is bank-local");
+        @(negedge clk);
+        fill_valid = 1'b0;
+        rd_valid = '0;
+        repeat (L-1) @(negedge clk);
+        assert (rd_rsp_valid === 4'b0010 && rd_rsp_data[1] === 64'h5555_6666_7777_8888 && rd_rsp_cookie[1] === 6'd11)
+            else $fatal(1, "TC3: other bank read or spurious stalled-bank response");
+        @(negedge clk);
+        rd_valid[0] = 1'b1; // Retry the blocked read after fill completion.
+        #1;
+        assert (rd_ready[0] === 1'b1) else $fatal(1, "TC3: retry ready");
+        @(negedge clk);
+        rd_valid = '0;
+        repeat (L-1) @(negedge clk);
+        assert (rd_rsp_valid === 4'b0001 && rd_rsp_data[0] === 64'h9999_AAAA_BBBB_CCCC && rd_rsp_cookie[0] === 6'd10)
+            else $fatal(1, "TC3: retry sees newly filled data");
+
+        // Testcase 4: reset flushes a read response (or pending pipeline work).
+        @(negedge clk);
+        rd_valid[0] = 1'b1;
+        @(negedge clk);
+        rd_valid = '0;
+        n_rst = 1'b0;
+        #1;
+        assert (rd_rsp_valid === '0 && protocol_error === 1'b0)
+            else $fatal(1, "TC4: asynchronous reset flush");
+        @(negedge clk);
+        n_rst = 1'b1;
+        repeat (L+1) begin
+            @(negedge clk);
+            assert (rd_rsp_valid === '0) else $fatal(1, "TC4: stale response after reset");
+        end
+
+        $display("PASS: data_array_tb (READ_LATENCY=%0d)", L);
         $finish;
     end
 endmodule
