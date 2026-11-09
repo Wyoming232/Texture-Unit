@@ -8,22 +8,13 @@ module tag_array (
     import cache_pkg::*;
     localparam int GROUP_W = (LANES > 1) ? $clog2(LANES) : 1;
 
-    // Retain the accepted pixel. Each group is cleared exactly once.
+    // Shared signals are declared first so every section uses explicit types.
+    // Each register is written by exactly one always_ff process below.
     tag_lookup_t [LANES-1:0] req_q;
     tag_out_t [LANES-1:0] rsp_q;
     logic active;
     logic [LANES-1:0] pending;
     logic req_fire, rsp_fire;
-
-    assign tag_if.req_ready = n_rst && !active;
-    assign tag_if.busy = active;
-    assign tag_if.rsp_valid = n_rst && active && !(|pending);
-    assign tag_if.rsp = rsp_q;
-    assign req_fire = tag_if.req_valid && tag_if.req_ready;
-    assign rsp_fire = tag_if.rsp_valid && tag_if.rsp_ready;
-
-    // One lookup/result register per bank. A captured candidate retains its
-    // group, way, address and original outcome through any downstream stall.
     logic [BANKS-1:0] selected, bank_busy, result_pending;
     logic [BANKS-1:0] bank_fire, lookup_capture, bank_fill_ready;
     logic [BANKS-1:0][GROUP_W-1:0] selected_group, result_group, route_ptr;
@@ -32,7 +23,69 @@ module tag_array (
     logic [BANKS-1:0][ADDR_W-1:0] addr_q;
     logic [BANKS-1:0][INDEX_W-1:0] bank_idx;
     logic [BANKS-1:0][TAG_W-1:0] bank_tag;
+    logic miss_selected, miss_lock;
+    logic [BANK_W-1:0] miss_bank, locked_bank, miss_ptr;
+    logic miss_fire;
 
+    // =====================================================================
+    // BLOCK 1: REQUEST REGISTERS (120 bits at the default geometry)
+    // =====================================================================
+    // Stores one pixel's four coalesced line groups on req_fire.
+    // The payload stays unchanged while the pixel is processed.
+    assign req_fire = tag_if.req_valid && tag_if.req_ready;
+
+    always_ff @(posedge clk or negedge n_rst) begin : request_registers
+        if (!n_rst) begin
+            req_q <= '0;
+        end else if (req_fire) begin
+            req_q <= tag_if.req;
+        end
+    end
+
+    // =====================================================================
+    // BLOCK 2: PIXEL TRACKING AND COMPLETE RESPONSE
+    // =====================================================================
+    // active: pixel ownership. pending: groups still awaiting acceptance.
+    // route_ptr: first group searched by each bank. rsp_q: original-group summary.
+    // Only accepted results (bank_fire) clear pending and advance route_ptr.
+    // The complete response remains owned until rsp_fire.
+    assign tag_if.req_ready = n_rst && !active;
+    assign tag_if.busy = active;
+    assign tag_if.rsp_valid = n_rst && active && !(|pending);
+    assign tag_if.rsp = rsp_q;
+    assign rsp_fire = tag_if.rsp_valid && tag_if.rsp_ready;
+
+    always_ff @(posedge clk or negedge n_rst) begin : pixel_tracking
+        if (!n_rst) begin
+            active <= 1'b0;
+            pending <= '0;
+            rsp_q <= '0;
+            route_ptr <= '0;
+        end else begin
+            if (req_fire) begin
+                active <= 1'b1;
+                rsp_q <= '0;
+                route_ptr <= '0;   // no bank_fire can coincide: !active
+                for (int g = 0; g < LANES; g++) pending[g] <= tag_if.req[g].valid;
+            end
+            if (rsp_fire) active <= 1'b0;
+            for (int b = 0; b < BANKS; b++) begin
+                if (bank_fire[b]) begin
+                    pending[result_group[b]] <= 1'b0;
+                    rsp_q[result_group[b]] <= result_q[b];
+                    route_ptr[b] <= (result_group[b] == GROUP_W'(LANES-1))
+                                    ? '0 : result_group[b] + 1'b1;
+                end
+            end
+        end
+    end
+
+    // =====================================================================
+    // BLOCK 3: COMBINATIONAL BANK ROUTING ARBITER
+    // =====================================================================
+    // Selects at most one pending group per physical bank.
+    // A bank with an occupied result register cannot select another group.
+    // lookup_capture qualifies selection with the tag bank's busy feedback.
     // Same-bank groups are served in rotating order starting at route_ptr.
     // route_ptr is cleared when a pixel is accepted, so every pixel's
     // same-bank groups are looked up in ascending group order (deterministic
@@ -58,12 +111,65 @@ module tag_array (
     end
     assign lookup_capture = selected & ~bank_busy;
 
-    // Single-port miss enqueue arbiter. Lock the selected bank while the
-    // queue stalls so newly arriving bank candidates cannot change its payload.
-    logic miss_selected, miss_lock;
-    logic [BANK_W-1:0] miss_bank, locked_bank, miss_ptr;
-    logic miss_fire;
+    // =====================================================================
+    // BLOCK 4: FOUR PHYSICAL TAG BANKS AND REFILL CONNECTIONS
+    // =====================================================================
+    // Each bank performs tag comparison and way selection; see tag_bank below.
+    // look_commit changes bank state only when its result is accepted.
+    // Refill marks an existing reserved way data-ready.
+    // Refill has a separate acceptance event and cannot create a new tag.
+    assign tag_if.fill_ready = n_rst && bank_fill_ready[tag_if.fill_bank];
+    for (genvar b = 0; b < BANKS; b++) begin : banks
+        tag_bank bank (
+            .clk(clk), .n_rst(n_rst),
+            .look_en(selected[b]), .look_idx(bank_idx[b]), .look_tag(bank_tag[b]),
+            .out(lookup_result[b]), .busy(bank_busy[b]),
+            .look_commit(bank_fire[b]),
+            .alloc_en(bank_fire[b] && !result_q[b].hit),
+            .commit_idx(addr_q[b][OFFSET_W+BANK_W +: INDEX_W]),
+            .commit_tag(addr_q[b][ADDR_W-1 -: TAG_W]),
+            .commit_way(result_q[b].hit_way),
+            .fill_en(tag_if.fill_en && tag_if.fill_bank == BANK_W'(b)),
+            .fill_idx(tag_if.fill_idx), .fill_way(tag_if.fill_way),
+            .fill_ready(bank_fill_ready[b])
+        );
+    end
 
+    // =====================================================================
+    // BLOCK 5: PER-BANK RESULT REGISTERS
+    // =====================================================================
+    // Retains the outcome, original group, tap mask, and aligned line address.
+    // lookup_capture fills a result slot; bank_fire releases it.
+    // This register boundary keeps a stalled result and its chosen way stable.
+    always_ff @(posedge clk or negedge n_rst) begin : bank_result_registers
+        if (!n_rst) begin
+            result_pending <= '0;
+            result_q <= '0;
+            result_group <= '0;
+            mask_q <= '0;
+            addr_q <= '0;
+        end else begin
+            for (int b = 0; b < BANKS; b++) begin
+                if (lookup_capture[b]) begin
+                    result_pending[b] <= 1'b1;
+                    result_q[b] <= lookup_result[b];
+                    result_group[b] <= selected_group[b];
+                    mask_q[b] <= req_q[selected_group[b]].tap_mask;
+                    addr_q[b] <= {bank_tag[b], bank_idx[b], BANK_W'(b), {OFFSET_W{1'b0}}};
+                end
+                if (bank_fire[b]) begin
+                    result_pending[b] <= 1'b0;
+                end
+            end
+        end
+    end
+
+    // =====================================================================
+    // BLOCK 6: SINGLE-PORT MISS ARBITER AND ITS TRACKING REGISTERS
+    // =====================================================================
+    // Chooses one new miss among retained bank results for the miss FIFO.
+    // The locked grant survives backpressure; miss_ptr advances on miss_fire.
+    // Pending tag matches have hit=1 and do not enter this miss arbitration.
     always_comb begin : select_miss_bank
         miss_selected = 1'b0;
         miss_bank = locked_bank;
@@ -81,6 +187,29 @@ module tag_array (
         end
     end
 
+    always_ff @(posedge clk or negedge n_rst) begin : miss_arbiter_tracking
+        if (!n_rst) begin
+            miss_lock <= 1'b0;
+            locked_bank <= '0;
+            miss_ptr <= '0;
+        end else begin
+            if (miss_selected && !miss_fire && !miss_lock) begin
+                miss_lock <= 1'b1;
+                locked_bank <= miss_bank;
+            end
+            if (miss_fire) begin
+                miss_lock <= 1'b0;
+                miss_ptr <= (miss_bank == BANK_W'(BANKS-1)) ? '0 : miss_bank + 1'b1;
+            end
+        end
+    end
+
+    // =====================================================================
+    // BLOCK 7: INCREMENTAL RESULT OUTPUTS AND ATOMIC MISS ACCEPTANCE
+    // =====================================================================
+    // Hits can complete independently across banks. A new miss completes only
+    // when both its result consumer and the miss FIFO accept it.
+    // bank_fire feeds blocks 2, 4, and 5; miss_fire feeds block 6.
     // Hits do not depend on miss-FIFO space. A new miss has two destinations:
     // preparation capacity is RESERVED; queue acceptance and bank acceptance
     // therefore commit on the same edge. Neither sink receives a partial miss.
@@ -103,75 +232,10 @@ module tag_array (
     end
     assign miss_fire = tag_if.miss_valid && tag_if.miss_ready;
 
-    always_ff @(posedge clk or negedge n_rst) begin : pixel_and_result_tracking
-        if (!n_rst) begin
-            active <= 1'b0;
-            pending <= '0;
-            req_q <= '0;
-            rsp_q <= '0;
-            result_pending <= '0;
-            result_q <= '0;
-            result_group <= '0;
-            route_ptr <= '0;
-            mask_q <= '0;
-            addr_q <= '0;
-            miss_lock <= 1'b0;
-            locked_bank <= '0;
-            miss_ptr <= '0;
-        end else begin
-            if (req_fire) begin
-                active <= 1'b1;
-                req_q <= tag_if.req;
-                rsp_q <= '0;
-                route_ptr <= '0;   // no bank_fire can coincide: !active
-                for (int g = 0; g < LANES; g++) pending[g] <= tag_if.req[g].valid;
-            end
-            if (rsp_fire) active <= 1'b0;
-            for (int b = 0; b < BANKS; b++) begin
-                if (lookup_capture[b]) begin
-                    result_pending[b] <= 1'b1;
-                    result_q[b] <= lookup_result[b];
-                    result_group[b] <= selected_group[b];
-                    mask_q[b] <= req_q[selected_group[b]].tap_mask;
-                    addr_q[b] <= {bank_tag[b], bank_idx[b], BANK_W'(b), {OFFSET_W{1'b0}}};
-                end
-                if (bank_fire[b]) begin
-                    result_pending[b] <= 1'b0;
-                    pending[result_group[b]] <= 1'b0;
-                    rsp_q[result_group[b]] <= result_q[b];
-                    route_ptr[b] <= (result_group[b] == GROUP_W'(LANES-1))
-                                    ? '0 : result_group[b] + 1'b1;
-                end
-            end
-            if (miss_selected && !miss_fire && !miss_lock) begin
-                miss_lock <= 1'b1;
-                locked_bank <= miss_bank;
-            end
-            if (miss_fire) begin
-                miss_lock <= 1'b0;
-                miss_ptr <= (miss_bank == BANK_W'(BANKS-1)) ? '0 : miss_bank + 1'b1;
-            end
-        end
-    end
-
-    // Refill has a separate acceptance event and cannot create a new tag.
-    assign tag_if.fill_ready = n_rst && bank_fill_ready[tag_if.fill_bank];
-    for (genvar b = 0; b < BANKS; b++) begin : banks
-        tag_bank bank (
-            .clk(clk), .n_rst(n_rst),
-            .look_en(selected[b]), .look_idx(bank_idx[b]), .look_tag(bank_tag[b]),
-            .out(lookup_result[b]), .busy(bank_busy[b]),
-            .look_commit(bank_fire[b]),
-            .alloc_en(bank_fire[b] && !result_q[b].hit),
-            .commit_idx(addr_q[b][OFFSET_W+BANK_W +: INDEX_W]),
-            .commit_tag(addr_q[b][ADDR_W-1 -: TAG_W]),
-            .commit_way(result_q[b].hit_way),
-            .fill_en(tag_if.fill_en && tag_if.fill_bank == BANK_W'(b)),
-            .fill_idx(tag_if.fill_idx), .fill_way(tag_if.fill_way),
-            .fill_ready(bank_fill_ready[b])
-        );
-    end
-
+    // =====================================================================
+    // SIMULATION CHECKS
+    // =====================================================================
+    // These checks are excluded when SYNTHESIS is defined.
 `ifndef SYNTHESIS
     initial begin
         if (WAYS != 4 || BANKS != 4 || LANES != 4 ||
@@ -188,8 +252,14 @@ module tag_array (
         end
     end
 `endif
+
 endmodule
 
+// ========================================================================
+// TAG_BANK IMPLEMENTATION (instantiated four times by block 4)
+// ========================================================================
+// Storage: valid = allocated, ready = data arrived, tag = line identity,
+// lru = three-bit replacement history for each set.
 module tag_bank (
     input logic clk, n_rst,
     input logic look_en,
@@ -217,6 +287,7 @@ module tag_bank (
     logic found_invalid, choose_left;
     logic alloc_fire;
 
+    // ----- BANK A: COMBINATIONAL LOOKUP AND REPLACEMENT SELECTION -----
     // A set whose four ways are all allocated-but-unfilled stalls the bank
     // (busy) until a refill lands. Forward progress is guaranteed by the miss
     // path contract (see miss_path.sv): every reserved way already has a miss
@@ -256,9 +327,11 @@ module tag_bank (
                                   : alloc_way;
         end
     end
+    // ----- BANK B: REFILL AND ALLOCATION ACCEPTANCE CONDITIONS -----
     assign fill_ready = n_rst && valid[fill_idx][fill_way] && !ready[fill_idx][fill_way];
     assign alloc_fire = n_rst && alloc_en && look_commit;
 
+    // ----- BANK C: ALLOCATION, DATA-READY, AND PLRU REGISTERS -----
     always_ff @(posedge clk or negedge n_rst) begin : tag_and_plru_update
         if (!n_rst) begin
             for (int s = 0; s < SETS_PER_BANK; s++) begin
@@ -282,6 +355,7 @@ module tag_bank (
             end
         end
     end
+    // ----- BANK D: TAG PAYLOAD WRITE -----
     // Tag payload is masked by valid; avoid resetting the payload RAM.
     always_ff @(posedge clk) begin : tag_payload_write
         if (alloc_fire) tag[commit_idx][commit_way] <= commit_tag;
