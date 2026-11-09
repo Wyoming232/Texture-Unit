@@ -252,18 +252,11 @@ module hit_path_temp #(
     end
 
     // ----------------DATA ARRAY----------------//
-<<<<<<< HEAD
-    // TODO : TMU HANDSHAKE SIGNALS AND LOGIC
-    // DATA ARRAY READ LOGIC
-    // PAYLOAD PREPARATION BUFFER
-    
-=======
     logic data_fill_valid, data_fill_ready, data_protocol_error;
     logic [BANK_W-1:0] data_fill_bank;
     logic [SET_W-1:0] data_fill_set;
     logic [WAY_W-1:0] data_fill_way;
     logic [LINE_BITS-1:0] data_fill_line;
->>>>>>> TODO-fixes-by-claude
 
     data_array #(.READ_LATENCY(READ_LATENCY), .COOKIE_W(COOKIE_W)) data (
         .clk(clk), .n_rst(n_rst),

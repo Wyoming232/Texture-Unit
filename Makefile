@@ -25,7 +25,7 @@ TB_miss_request_fifo := testbenches/miss_request_fifo_tb.sv
 TB_data_array := testbenches/data_array_tb.sv
 TB_reorder_buffer := testbenches/reorder_buffer_tb.sv
 TB_payload_buffer := testbenches/payload_buffer_tb.sv
-TB_hit_path_temp := testbenches/hit_path_temp.sv
+TB_hit_path_temp := testbenches/hit_path_temp_tb.sv
 
 TOP_address_calculation := address_calculation_tb
 TOP_coalescer := coalescer_contract_tb

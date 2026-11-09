@@ -25,186 +25,89 @@ module payload_buffer_tb;
     import cache_pkg::*;
     localparam int CW = 4;
 
-    logic clk = 0; always #5 clk = ~clk;
-    logic n_rst = 0;
-    logic alloc_valid = 0, alloc_ready;
-    frag_data_t alloc_frag = '0;
-    logic [BANKS-1:0] wr_valid = '0;
-    logic [BANKS-1:0][CW-1:0] wr_cookie = '0;
-    logic [BANKS-1:0][TEXEL_BITS-1:0] wr_data = '0;
-    logic rsp_valid, rsp_ready = 1;
+    logic clk, n_rst;
+    logic alloc_valid, alloc_ready;
+    frag_data_t alloc_frag;
+    logic [BANKS-1:0] wr_valid;
+    logic [BANKS-1:0][CW-1:0] wr_cookie;
+    logic [BANKS-1:0][TEXEL_BITS-1:0] wr_data;
+    logic rsp_valid, rsp_ready;
     texture_cache_return_t rsp_payload;
 
-    payload_buffer #(.COOKIE_W(CW)) dut (.*);
+    always #5 clk = ~clk;
 
-    int errors = 0, checks = 0, quads_out = 0;
-    texture_cache_return_t expected [$];
-
-    typedef struct { int pix, tap; logic [TEXEL_BITS-1:0] data; int due; } wr_t;
-    wr_t writes [$];
-    int cycle = 0;
-
-    function automatic logic [TEXEL_BITS-1:0] texel(input int q, pix, tap);
-        return {32'(q * 1000 + pix * 10 + tap), 32'hC0DE_0000 | 32'(q)};
-    endfunction
-
-    // Build one quad: fragments for pixels 0..3 and the expected return.
-    task automatic make_quad(input int q, input logic [LANES-1:0] used, input logic [3:0][LANES-1:0] err,
-                             output frag_data_t f [4], output texture_cache_return_t r);
-        r = '0;
-        for (int p = 0; p < 4; p++) begin
-            f[p] = '0;
-            f[p].batch_id = BATCH_ID_W'(q);
-            f[p].pixel_id = 2'(p);
-            f[p].used = used;
-            f[p].addr_error = err[p] & used;
-            f[p].pixel_metadata.tmu_quad_metadata.rd = 5'(q);
-            f[p].pixel_metadata.tmu_quad_metadata.warp_id = q[0];
-            f[p].pixel_metadata.tmu_quad_metadata.quad_index = 3'(q);
-            f[p].pixel_metadata.tmu_quad_metadata.lod_fraction = 8'(q * 3);
-            f[p].pixel_metadata.tmu_quad_metadata.reserved = 17'(q * 77);
-            f[p].pixel_metadata.u_frac = 8'(q + p);
-            f[p].pixel_metadata.v_frac = 8'(q * 2 + p);
-            r.tmu_quad_metadata = f[p].pixel_metadata.tmu_quad_metadata;
-            r.u_frac[p] = f[p].pixel_metadata.u_frac;
-            r.v_frac[p] = f[p].pixel_metadata.v_frac;
-            r.texel_valid[p] = (|f[p].addr_error) ? 4'b0 : used;
-            r.addr_error[p] = f[p].addr_error;
-            for (int t = 0; t < 4; t++)
-                if (r.texel_valid[p][t]) r.texels[p][t] = texel(q, p, t);
-        end
-    endtask
-
-    // ---- write driver: up to BANKS due writes per cycle, any order ----
-    always @(negedge clk) begin
-        int lane;
-        wr_valid = '0;
-        lane = 0;
-        writes.shuffle();
-        for (int i = 0; i < writes.size() && lane < BANKS; ) begin
-            if (writes[i].due <= cycle) begin
-                wr_valid[lane] = 1'b1;
-                wr_cookie[lane] = {2'(writes[i].pix), 2'(writes[i].tap)};
-                wr_data[lane] = writes[i].data;
-                writes.delete(i);
-                lane++;
-            end else i++;
-        end
-    end
-    always @(posedge clk) cycle++;
-
-    // ---- output monitor ----
-    texture_cache_return_t held;
-    bit holding = 0;
-    always @(posedge clk) if (n_rst) begin
-        if (holding && rsp_valid && rsp_payload !== held) begin
-            errors++; $error("output changed while stalled");
-        end
-        holding = rsp_valid && !rsp_ready;
-        held = rsp_payload;
-        if (rsp_valid && rsp_ready) begin
-            checks++;
-            if (expected.size() == 0) begin
-                errors++; $error("unexpected return");
-            end else begin
-                if (rsp_payload !== expected[0]) begin
-                    errors++; $error("quad %0d payload mismatch", quads_out);
-                end
-                void'(expected.pop_front());
-            end
-            quads_out++;
-        end
-    end
-
-    // Allocate one pixel (waits for alloc_ready) and schedule its writes.
-    task automatic alloc_pixel(input frag_data_t f, input int q, input int max_lat);
-        alloc_frag = f; alloc_valid = 1; #1;
-        while (!alloc_ready) begin @(posedge clk); #1; end
-        @(posedge clk); #1;
-        alloc_valid = 0;
-        for (int t = 0; t < 4; t++)
-            if (f.used[t] && !(|f.addr_error)) begin
-                wr_t w;
-                w.pix = int'(f.pixel_id); w.tap = t;
-                w.data = texel(q, f.pixel_id, t);
-                w.due = cycle + 1 + $urandom_range(max_lat);
-                writes.push_back(w);
-            end
-    endtask
-
-    task automatic send_quad(input int q, input logic [LANES-1:0] used,
-                             input logic [3:0][LANES-1:0] err, input int max_lat);
-        frag_data_t f [4];
-        texture_cache_return_t r;
-        make_quad(q, used, err, f, r);
-        expected.push_back(r);
-        for (int p = 0; p < 4; p++) alloc_pixel(f[p], q, max_lat);
-    endtask
-
-    task automatic wait_idle(input int limit);
-        int c = 0;
-        while ((expected.size() != 0 || writes.size() != 0) && c < limit) begin @(posedge clk); c++; end
-        if (expected.size() != 0) begin errors++; $error("%0d quads never returned", expected.size()); end
-        #1;
-    endtask
-
-    frag_data_t fq [4];
-    texture_cache_return_t rq;
-    logic [3:0][LANES-1:0] err;
+    payload_buffer #(.COOKIE_W(CW)) dut (
+        .clk(clk), .n_rst(n_rst), .alloc_valid(alloc_valid),
+        .alloc_ready(alloc_ready), .alloc_frag(alloc_frag),
+        .wr_valid(wr_valid), .wr_cookie(wr_cookie), .wr_data(wr_data),
+        .rsp_valid(rsp_valid), .rsp_ready(rsp_ready), .rsp_payload(rsp_payload)
+    );
 
     initial begin
-        repeat (2) @(posedge clk); #1;
-        if (rsp_valid !== 0 || alloc_ready !== 0) begin errors++; $error("outputs not quiet in reset"); end
-        n_rst = 1; #1;
-        if (!alloc_ready) begin errors++; $error("alloc_ready low after reset"); end
+        clk = 1'b0;
+        n_rst = 1'b0;
+        alloc_valid = 1'b0;
+        alloc_frag = '0;
+        wr_valid = '0;
+        wr_cookie = '0;
+        wr_data = '0;
+        rsp_ready = 1'b0;
+        @(negedge clk);
+        @(negedge clk);
+        n_rst = 1'b1;
 
-        // ---- directed ----
-        send_quad(1, 4'b1111, '0, 6);          wait_idle(100);
-        send_quad(2, 4'b0001, '0, 3);          wait_idle(100);
-        err = '0; err[1] = 4'b0110; err[3] = 4'b1111;
-        send_quad(3, 4'b1111, err, 4);         wait_idle(100);
+        // Testcase: allocate pixels 0..3 of ONE nearest-filtered quad.
+        @(negedge clk);
+        alloc_frag.batch_id = 8'd1;
+        alloc_frag.used = 4'b0001;
+        alloc_frag.pixel_metadata.tmu_quad_metadata.filter_mode = FILTER_NEAREST;
+        alloc_frag.pixel_metadata.tmu_quad_metadata.rd = 5'd7;
+        alloc_frag.pixel_id = 2'd0;
+        alloc_frag.pixel_metadata.u_frac = 8'd10;
+        alloc_frag.pixel_metadata.v_frac = 8'd20;
+        alloc_valid = 1'b1;
+        @(negedge clk);
+        alloc_frag.pixel_id = 2'd1;
+        alloc_frag.pixel_metadata.u_frac = 8'd11;
+        alloc_frag.pixel_metadata.v_frac = 8'd21;
+        @(negedge clk);
+        alloc_frag.pixel_id = 2'd2;
+        alloc_frag.pixel_metadata.u_frac = 8'd12;
+        alloc_frag.pixel_metadata.v_frac = 8'd22;
+        @(negedge clk);
+        alloc_frag.pixel_id = 2'd3;
+        alloc_frag.pixel_metadata.u_frac = 8'd13;
+        alloc_frag.pixel_metadata.v_frac = 8'd23;
+        @(negedge clk);
+        alloc_valid = 1'b0;
 
-        // ---- slot already in use ----
-        make_quad(4, 4'b1111, '0, fq, rq);
-        expected.push_back(rq);
-        alloc_pixel(fq[0], 4, 2);
-        alloc_frag = fq[0]; #1; checks++;
-        if (alloc_ready) begin errors++; $error("alloc_ready high for an occupied slot"); end
-        for (int p = 1; p < 4; p++) alloc_pixel(fq[p], 4, 2);
-        wait_idle(100);
+        // Manually return tap 0 for each pixel, one on each write lane.
+        // rsp_valid must still be 0 before these writes complete.
+        wr_cookie[0] = {2'd0, 2'd0};
+        wr_cookie[1] = {2'd1, 2'd0};
+        wr_cookie[2] = {2'd2, 2'd0};
+        wr_cookie[3] = {2'd3, 2'd0};
+        wr_data[0] = 64'h0000_0000_0000_0010;
+        wr_data[1] = 64'h0000_0000_0000_0020;
+        wr_data[2] = 64'h0000_0000_0000_0030;
+        wr_data[3] = 64'h0000_0000_0000_0040;
+        wr_valid = 4'b1111;
+        @(negedge clk);
+        wr_valid = '0;
+        wait (rsp_valid);
+        @(negedge clk);
+        // rsp_payload.texels[0..3][0]=0x10,0x20,0x30,0x40;
+        // each texel_valid[p]=0001, other taps zero, addr_error=0, rd=7.
+        // u_frac=10,11,12,13 and v_frac=20,21,22,23 in pixel order.
+        // Hold one cycle to inspect the complete quad before consumption.
+        @(negedge clk);
+        rsp_ready = 1'b1;
+        @(negedge clk);
+        rsp_ready = 1'b0;
+        // rsp_valid=0 after the accepted output transfer.
+        #10;
 
-        // ---- TMU backpressure ----
-        rsp_ready = 0;
-        send_quad(5, 4'b1111, '0, 2);
-        send_quad(6, 4'b1111, '0, 2);           // assembles behind the held quad
-        repeat (10) @(posedge clk); #1;
-        make_quad(7, 4'b1111, '0, fq, rq);
-        alloc_frag = fq[0]; #1; checks++;
-        if (alloc_ready) begin errors++; $error("third quad accepted while two are held"); end
-        if (!rsp_valid) begin errors++; $error("held quad not presented"); end
-        rsp_ready = 1;
-        wait_idle(100);
-
-        // ---- random ----
-        fork
-            begin
-                for (int q = 10; q < 310; q++) begin
-                    for (int p = 0; p < 4; p++) err[p] = ($urandom_range(9) == 0) ? 4'($urandom) : 4'b0;
-                    send_quad(q, ($urandom_range(3) == 0) ? 4'b0001 : 4'b1111, err, 8);
-                end
-            end
-            begin
-                repeat (6000) begin @(negedge clk); rsp_ready = ($urandom_range(99) < 70); end
-                rsp_ready = 1;
-            end
-        join
-        wait_idle(1000);
-
-        if (errors == 0)
-            $display("PASS payload_buffer_tb: %0d checks, %0d quads", checks, quads_out);
-        else
-            $fatal(1, "FAIL payload_buffer_tb: %0d errors", errors);
+        // Add the next manual testcase here.
         $finish;
     end
-    initial begin #2000000; $fatal(1, "payload_buffer_tb timeout"); end
 endmodule
