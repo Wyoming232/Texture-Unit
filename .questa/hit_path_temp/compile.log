@@ -1,0 +1,70 @@
+QuestaSim vlog 2022.4_5 Compiler 2024.06 Jun 21 2024
+Start time: 21:25:26 on Nov 08,2026
+vlog -sv -work work -l compile.log "+incdir+/home/ecegridfs/a/437mg192/Texture-Unit" "+define+CACHE_PKG_SV" /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv 
+-- Compiling interface texture_cache_request_if
+-- Importing package cache_pkg
+-- Compiling interface texture_cache_return_if
+-- Compiling interface mem_if
+-- Compiling interface tag_array_if
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(3)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(15): (vlog-13314) Defaulting port 'pixel_tap_sel' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(3)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(16): (vlog-13314) Defaulting port 'pixel_metadata_sel' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(3)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(148): (vlog-13314) Defaulting port 'addr0' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(3)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(148): (vlog-13314) Defaulting port 'addr1' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(3)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(148): (vlog-13314) Defaulting port 'addr2' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(3)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/address_calculation.sv(148): (vlog-13314) Defaulting port 'addr3' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(4)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/coalesced_fragment_adapter.sv(7): (vlog-13314) Defaulting port 'coa_addr_out' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(4)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/coalesced_fragment_adapter.sv(8): (vlog-13314) Defaulting port 'tag_result' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(6)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/data_array.sv(12): (vlog-13314) Defaulting port 'rd_set' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(6)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/data_array.sv(13): (vlog-13314) Defaulting port 'rd_way' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(6)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/data_array.sv(14): (vlog-13314) Defaulting port 'rd_byte_offset' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(6)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/data_array.sv(15): (vlog-13314) Defaulting port 'rd_cookie' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(7)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/frag_fifo.sv(15): (vlog-13314) Defaulting port 'frag_in' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(9)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/payload_buffer.sv(24): (vlog-13314) Defaulting port 'alloc_frag' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(9)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/payload_buffer.sv(26): (vlog-13314) Defaulting port 'wr_cookie' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(9)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/payload_buffer.sv(27): (vlog-13314) Defaulting port 'wr_data' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Error: (vlog-13069) ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(255): near "<<<": syntax error, unexpected <<<.
+** Error: (vlog-13069) ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(266): near ">>>": syntax error, unexpected >>>.
+** Error: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(299): (vlog-2730) Undefined variable: 'data_protocol_error'.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(328): (vlog-13314) Defaulting port 'pixel_taps_in' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(331): (vlog-13314) Defaulting port 'pixel_metadata_in' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+** Warning: ** while parsing file included at /home/ecegridfs/a/437mg192/Texture-Unit/testbenches/hit_path_temp.sv(30)
+** at /home/ecegridfs/a/437mg192/Texture-Unit/src/hit_path_temp.sv(358): (vlog-13314) Defaulting port 'base_info' kind to 'var' rather than 'wire' due to default compile option setting of -svinputport=relaxed.
+End time: 21:25:26 on Nov 08,2026, Elapsed time: 0:00:00
+Errors: 3, Warnings: 19

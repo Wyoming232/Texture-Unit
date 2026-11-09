@@ -1,0 +1,47 @@
+# Reading pref.tcl
+# //  Questa Sim
+# //  Version 2022.4_5 linux Jun 21 2024
+# //
+# //  Copyright 1991-2024 Mentor Graphics Corporation
+# //  All Rights Reserved.
+# //
+# //  QuestaSim and its associated documentation contain trade
+# //  secrets and commercial or financial information that are the property of
+# //  Mentor Graphics Corporation and are privileged, confidential,
+# //  and exempt from disclosure under the Freedom of Information Act,
+# //  5 U.S.C. Section 552. Furthermore, this information
+# //  is prohibited from disclosure under the Trade Secrets Act,
+# //  18 U.S.C. Section 1905.
+# //
+# waves.wlf opened as dataset "waves"
+# do "/home/ecegridfs/a/437mg192/Texture-Unit/waves/data_array_wave.do"
+# Cannot open macro file: /home/ecegridfs/a/437mg192/Texture-Unit/waves/data_array_wave.do
+add wave -position insertpoint  \
+waves:/data_array_tb/clk \
+waves:/data_array_tb/n_rst \
+waves:/data_array_tb/rd_valid \
+waves:/data_array_tb/rd_ready \
+waves:/data_array_tb/rd_rsp_valid \
+waves:/data_array_tb/rd_set \
+waves:/data_array_tb/rd_way \
+waves:/data_array_tb/rd_byte_offset \
+waves:/data_array_tb/rd_cookie \
+waves:/data_array_tb/rd_rsp_cookie \
+waves:/data_array_tb/rd_rsp_data \
+waves:/data_array_tb/fill_valid \
+waves:/data_array_tb/fill_ready \
+waves:/data_array_tb/fill_bank \
+waves:/data_array_tb/fill_set \
+waves:/data_array_tb/fill_way \
+waves:/data_array_tb/fill_line \
+waves:/data_array_tb/protocol_error \
+waves:/data_array_tb/expected_error \
+waves:/data_array_tb/coord_ok \
+waves:/data_array_tb/expected_ready \
+waves:/data_array_tb/expected_fill_ready \
+waves:/data_array_tb/reads \
+waves:/data_array_tb/fills \
+waves:/data_array_tb/cycles \
+waves:/data_array_tb/rng
+configure wave -signalnamewidth 1
+write format wave -window .main_pane.wave.interior.cs.body.pw.wf /home/ecegridfs/a/437mg192/Texture-Unit/waves/data_array_wave.do
