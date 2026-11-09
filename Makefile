@@ -91,7 +91,7 @@ $(BUILD_DIR)/%/.compiled: $(SOURCES) $(ROOT)/Makefile
 	  -do 'onerror {quit -code 1}; onbreak {quit -code 2}; log -r /*; run -all; quit -code 0' \
 	  work.$(TOP_$*)
 	@cd "$(BUILD_DIR)/$*" && $(VSIM) -gui -view waves.wlf \
-	  -do 'add wave -r /*'
+	  -do 'do "$(ROOT)/waves/$*_wave.do"'
 
 # Coverage uses its own instrumented library so ordinary runs stay fast.
 $(BUILD_DIR)/%/.covered: $(SOURCES) $(ROOT)/Makefile
