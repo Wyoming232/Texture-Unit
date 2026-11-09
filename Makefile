@@ -14,7 +14,8 @@ VSIM_FLAGS ?=
 SEED ?= 1
 COVER_TYPES ?= bcefst
 
-TESTS := address_calculation coalescer tag_array fragment_fifo miss_request_fifo data_array
+TESTS := address_calculation coalescer tag_array fragment_fifo miss_request_fifo data_array \
+         reorder_buffer payload_buffer hit_path_temp
 
 TB_address_calculation := testbenches/address_calculation_tb.sv
 TB_coalescer := testbenches/coalescer_tb.sv
@@ -22,6 +23,9 @@ TB_tag_array := testbenches/tag_array_tb.sv
 TB_fragment_fifo := testbenches/fragment_fifo_tb.sv
 TB_miss_request_fifo := testbenches/miss_request_fifo_tb.sv
 TB_data_array := testbenches/data_array_tb.sv
+TB_reorder_buffer := testbenches/reorder_buffer_tb.sv
+TB_payload_buffer := testbenches/payload_buffer_tb.sv
+TB_hit_path_temp := testbenches/hit_path_temp.sv
 
 TOP_address_calculation := address_calculation_tb
 TOP_coalescer := coalescer_contract_tb
@@ -29,6 +33,9 @@ TOP_tag_array := tag_array_tb
 TOP_fragment_fifo := fragment_fifo_tb
 TOP_miss_request_fifo := miss_request_fifo_tb
 TOP_data_array := data_array_tb
+TOP_reorder_buffer := reorder_buffer_tb
+TOP_payload_buffer := payload_buffer_tb
+TOP_hit_path_temp := hit_path_temp_tb
 
 # The other benches include their DUT source. data_array_tb does not.
 EXTRA_data_array := $(ROOT)/src/data_array.sv
@@ -50,7 +57,7 @@ help:
 	@echo '  make list            show supported test names and top modules'
 	@echo '  make clean           remove generated .questa files'
 	@echo 'Options: SEED=<integer>, BUILD_DIR=<path>, VLOG_FLAGS=..., VSIM_FLAGS=...'
-	@echo 'reorder_buffer_tb.sv is incomplete; hit_path_temp.sv and frag_fifo.sv are placeholders.'
+	@echo 'hit_path_temp is the end-to-end bench (TMU model + out-of-order memory model).'
 
 list:
 	@$(foreach test,$(TESTS),echo '$(test) -> $(TOP_$(test)) ($(TB_$(test)))';)
@@ -84,7 +91,7 @@ $(BUILD_DIR)/%/.compiled: $(SOURCES) $(ROOT)/Makefile
 	  -do 'onerror {quit -code 1}; onbreak {quit -code 2}; log -r /*; run -all; quit -code 0' \
 	  work.$(TOP_$*)
 	@cd "$(BUILD_DIR)/$*" && $(VSIM) -gui -view waves.wlf \
-	  -do 'add wave -r /*'
+	  -do 'do "$(ROOT)/waves/$*_wave.do"'
 
 # Coverage uses its own instrumented library so ordinary runs stay fast.
 $(BUILD_DIR)/%/.covered: $(SOURCES) $(ROOT)/Makefile

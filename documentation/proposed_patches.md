@@ -1,4 +1,10 @@
-# Proposed patches (for review — not applied to RTL)
+# Proposed patches — APPLIED
+
+Status: applied to `interfaces/tag_array_if.sv` and `packages/cache_pkg.sv`
+(final versions also add the new signals to the `frontend` modport and
+document `tap_mask` / `miss_req_entry_t` in comments). `coalesced_fragment_adapter`
+now drives `tag_req[g].tap_mask` and `coalescer_tb` checks a 30-bit
+`tag_lookup_t`. The original proposal is kept below for reference.
 
 Minimal additions, inferred from how `src/tag_array.sv` and
 `src/miss_request_fifo.sv` already use them, that make those modules (and

@@ -3,15 +3,18 @@
 module miss_request_fifo #(
     parameter int DEPTH = cache_pkg::MISS_REQ_DEPTH,
     parameter int PTR_W = (DEPTH > 1) ? $clog2(DEPTH) : 1,
-    parameter int COUNT_W = $clog2(DEPTH + 1)
+    parameter int COUNT_W = $clog2(DEPTH + 1),
+    // Same meaning as frag_fifo.FULL_BYPASS (pop -> miss_ready comb path).
+    parameter bit FULL_BYPASS = 1'b0
 ) (
     input logic clk, n_rst,
     input logic miss_valid,
     output logic miss_ready,
     input logic [cache_pkg::ADDR_W-1:0] miss_addr,
     input logic [cache_pkg::WAY_W-1:0] miss_way,
-    // TODO: future controller qualifies pop with actual downstream acceptance.
-    // Memory ready alone is insufficient without ROB/tracker capacity.
+    // miss_pop must mean "memory accepted the request AND the ROB allocated a
+    // slot for it": miss_path drives miss_pop = mem req_ready && !rob_full.
+    // Memory ready alone is insufficient without ROB capacity.
     input logic miss_pop,
     output logic miss_tail_valid,
     output logic [cache_pkg::ADDR_W-1:0] miss_tail_addr,
@@ -26,11 +29,11 @@ module miss_request_fifo #(
     logic [PTR_W-1:0] wr_ptr, rd_ptr;
     logic push_fire, pop_fire;
 
-    // TODO : ready is derived from registered count, so push+pop in the same cycle while
-    // full performs the pop only (push refused). Add a bypass if full-throughput is required.
+    // With FULL_BYPASS = 0, push+pop in the same cycle while full performs
+    // the pop only (see frag_fifo).
     assign full = count == COUNT_W'(DEPTH);
     assign empty = count == '0;
-    assign miss_ready = n_rst && !full;
+    assign miss_ready = n_rst && (!full || (FULL_BYPASS && miss_pop));
     assign miss_tail_valid = n_rst && !empty;
     assign push_fire = miss_valid && miss_ready;
     assign pop_fire = miss_pop && miss_tail_valid;
@@ -72,6 +75,16 @@ module miss_request_fifo #(
     always @(posedge clk) begin : check_miss_alignment
         if (push_fire && miss_addr[OFFSET_W-1:0] != '0)
             $fatal(1, "Miss FIFO requires an aligned line address");
+    end
+    // The tag array never issues a second miss for a pending line (it hits
+    // the reservation), so a queued duplicate means a reservation was lost.
+    always @(posedge clk) begin : check_no_duplicate_miss
+        if (push_fire)
+            for (int i = 0; i < DEPTH; i++)
+                if (i < int'(count) &&
+                    miss_entries[(int'(rd_ptr) + i) % DEPTH].line_addr == miss_addr &&
+                    !(pop_fire && i == 0))
+                    $error("Miss FIFO: duplicate in-flight line %h", miss_addr);
     end
 `endif
 endmodule

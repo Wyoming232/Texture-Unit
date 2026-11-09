@@ -2,12 +2,16 @@
 
 import cache_pkg::*;
 
+// Instantiated by hit_path_temp. base_addr is already mip-adjusted
+// (mip_base_addr); log2_width/log2_height are the SELECTED mip's dimensions
+// and select the Morton layout inside that mip (see addr_calc).
 module address_calculation (
     // input logic clk,
     // input logic n_rst,
     // strictly combinational, these should not be necessary
 
     input logic [31:0] base_addr,
+    input logic [4:0] log2_width, log2_height,
     input pixel_taps_t pixel_tap_sel,
     input tmu_pixel_metadata_t pixel_metadata_sel,
 
@@ -27,12 +31,16 @@ module address_calculation (
 
     // ----------------ADDR_CALC----------------//
     addr_calc addr_calc_unit0 (.x(pixel_tap_sel.x[0]), .y(pixel_tap_sel.y[0]),
+                              .log2_width(log2_width), .log2_height(log2_height),
                               .base_addr(base_addr), .addr_out(addr0));
     addr_calc addr_calc_unit1 (.x(pixel_tap_sel.x[1]), .y(pixel_tap_sel.y[1]),
+                              .log2_width(log2_width), .log2_height(log2_height),
                               .base_addr(base_addr), .addr_out(addr1));
     addr_calc addr_calc_unit2 (.x(pixel_tap_sel.x[2]), .y(pixel_tap_sel.y[2]),
+                              .log2_width(log2_width), .log2_height(log2_height),
                               .base_addr(base_addr), .addr_out(addr2));
     addr_calc addr_calc_unit3 (.x(pixel_tap_sel.x[3]), .y(pixel_tap_sel.y[3]),
+                              .log2_width(log2_width), .log2_height(log2_height),
                               .base_addr(base_addr), .addr_out(addr3));
     
     // Nearest uses c00 only; bilinear and each trilinear mip use four taps.
@@ -66,39 +74,73 @@ module address_calculation (
         coa_addr_out.batch_id = batch_id;
         coa_addr_out.pixel_id = pixel_id;
         coa_addr_out.pixel_metadata = pixel_metadata_sel;
-        coa_addr_out.used = used;
+        coa_addr_out.tap_mask = used;
         coa_addr_out.addr_error = addr_error;
         coa_addr_out.offset = {addr3.offset, addr2.offset, addr1.offset, addr0.offset};
         coa_addr_out.lines = {coa_addrs3, coa_addrs2, coa_addrs1, coa_addrs0};
     end
 endmodule
 
-module addr_calc (
-    input  logic [15:0] x,
-    input  logic [15:0] y,
+module addr_calc #(
+    parameter int COORD_W = 16   // texel coordinate width supplied by the TMU
+) (
+    input  logic [COORD_W-1:0] x,
+    input  logic [COORD_W-1:0] y,
+    // Selected-mip dimensions: the mip is 2^log2_width x 2^log2_height texels.
+    input  logic [4:0] log2_width,
+    input  logic [4:0] log2_height,
     input  logic [31:0] base_addr,
 
     output addr_calc_out_t addr_out
 );
+    localparam int MORTON_BITS = 2*COORD_W;
+    localparam int TEXEL_SHIFT = $clog2(cache_pkg::TEXEL_BYTES);
+    localparam int SUM_W = ((MORTON_BITS+TEXEL_SHIFT > 32) ? MORTON_BITS+TEXEL_SHIFT : 32) + 1;
 
-    logic [35:0] full_addr;
-    logic [31:0] morton_index;
-    
-    // TODO : Morton index calculation is currently hardcoded for 16-bit x and y. This should be parameterized for different texture sizes.
-    for (genvar b = 0; b < 16; b++) begin : gen_morton
-        assign morton_index[2*b]     = x[b];
-        assign morton_index[2*b + 1] = y[b];
+    logic [SUM_W-1:0] full_addr;
+    logic [MORTON_BITS-1:0] morton_index;
+    int unsigned lw, lh, sq;
+    logic coord_error;
+
+    // Morton (Z-order) index inside one 2^lw x 2^lh mip:
+    //  - the low sq = min(lw, lh) bits of x and y are interleaved
+    //    (x -> even bits, y -> odd bits), forming square Z-tiles;
+    //  - the remaining (|lw-lh|) bits of the LONGER axis are appended above
+    //    bit 2*sq, so successive square tiles are laid out along that axis.
+    // For a square texture with lw = lh = COORD_W this is the plain 16/16
+    // interleave used before. A mip occupies exactly 2^(lw+lh) texels, which
+    // matches the per-level size summed by mip_base_addr.
+    always_comb begin : morton_swizzle
+        lw = (int'(log2_width)  > COORD_W) ? COORD_W : int'(log2_width);
+        lh = (int'(log2_height) > COORD_W) ? COORD_W : int'(log2_height);
+        sq = (lw < lh) ? lw : lh;
+        morton_index = '0;
+        for (int b = 0; b < COORD_W; b++) begin
+            if (b < sq) begin
+                morton_index[2*b]     = x[b];
+                morton_index[2*b + 1] = y[b];
+            end else if (b < lw && lw > lh) begin
+                morton_index[sq + b] = x[b];
+            end else if (b < lh && lh > lw) begin
+                morton_index[sq + b] = y[b];
+            end
+        end
+        // Coordinates must lie inside the selected mip, and the mip must be
+        // addressable with COORD_W-bit coordinates.
+        coord_error = (int'(log2_width) > COORD_W) || (int'(log2_height) > COORD_W);
+        for (int b = 0; b < COORD_W; b++)
+            if ((b >= lw && x[b]) || (b >= lh && y[b])) coord_error = 1'b1;
     end
 
     // This frontend retains the existing fixed 32-bit, 8-byte-texel geometry.
-    assign full_addr = {4'b0, base_addr} + {1'b0, morton_index, 3'b0};
+    assign full_addr = SUM_W'(base_addr) + (SUM_W'(morton_index) << TEXEL_SHIFT);
     assign addr_out.byte_addr = full_addr[31:0];
     assign addr_out.line_addr = {addr_out.byte_addr[31:7], 7'b0};
     assign addr_out.offset = addr_out.byte_addr[6:0];
     assign addr_out.bank = addr_out.byte_addr[8:7];
     assign addr_out.index = addr_out.byte_addr[11:9];
     assign addr_out.tag = addr_out.byte_addr[31:12];
-    assign addr_out.addr_error = (|full_addr[35:32]) | (|base_addr[2:0]);
+    assign addr_out.addr_error = (|full_addr[SUM_W-1:32]) | (|base_addr[2:0]) | coord_error;
 
 endmodule
 
@@ -171,7 +213,7 @@ module coalesced_addrs #()(
 
     always_comb begin
         coa_addrs0 = '0;
-        coa_addrs1 = '0;coa_addrs
+        coa_addrs1 = '0;
         coa_addrs2 = '0;
         coa_addrs3 = '0;
         coa_addrs0.line_addr = addr0.line_addr;
